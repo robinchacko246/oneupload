@@ -63,18 +63,25 @@ app.use(express.json());
 app.use(express.static(config.paths.public));
 
 // ---------- connecting accounts ----------
-const pendingStates = new Map(); // state -> expiry time
+// The login "state" is signed instead of kept in memory, because on Vercel the
+// login callback can land on a different server instance than the one that started it.
+function signState(payload) {
+  return crypto.createHmac('sha256', `state:${config.mediaSecret}`).update(payload).digest('hex');
+}
 
 function newState() {
-  const state = crypto.randomBytes(16).toString('hex');
-  pendingStates.set(state, Date.now() + 10 * 60 * 1000);
-  return state;
+  const payload = `${Date.now() + 10 * 60 * 1000}.${crypto.randomBytes(8).toString('hex')}`;
+  return `${payload}.${signState(payload)}`;
 }
 
 function useState(state) {
-  const exp = pendingStates.get(state);
-  pendingStates.delete(state);
-  return Boolean(exp && exp > Date.now());
+  const i = state.lastIndexOf('.');
+  if (i < 0) return false;
+  const payload = state.slice(0, i);
+  const sig = Buffer.from(state.slice(i + 1));
+  const expected = Buffer.from(signState(payload));
+  if (sig.length !== expected.length || !crypto.timingSafeEqual(sig, expected)) return false;
+  return Number(payload.split('.')[0]) > Date.now();
 }
 
 const backHome = (res, params) => res.redirect(`/?${new URLSearchParams(params)}`);
