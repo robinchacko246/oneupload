@@ -1,7 +1,6 @@
 // Facebook Page + Instagram (Business/Creator) publishing through the Meta Graph API.
 import fs from 'node:fs';
 import { config } from './config.js';
-import { getAccounts, updateAccounts } from './store.js';
 
 const SCOPES = [
   'pages_show_list',
@@ -87,7 +86,8 @@ export function metaAuthUrl(state) {
   return url.toString();
 }
 
-export async function metaHandleCallback(code) {
+// Facebook login -> every Page the person allowed, with its linked Instagram account.
+export async function metaExchangeCode(code) {
   const short = await graphGet('/oauth/access_token', {
     client_id: config.meta.appId,
     client_secret: config.meta.appSecret,
@@ -104,7 +104,7 @@ export async function metaHandleCallback(code) {
 
   const res = await graphGet('/me/accounts', {
     access_token: long.access_token,
-    fields: 'id,name,access_token,instagram_business_account{id,username}',
+    fields: 'id,name,access_token,picture{url},instagram_business_account{id,username,profile_picture_url}',
     limit: '100',
   });
 
@@ -112,15 +112,20 @@ export async function metaHandleCallback(code) {
     id: p.id,
     name: p.name,
     accessToken: p.access_token,
+    picture: p.picture?.data?.url || null,
     ig: p.instagram_business_account
-      ? { id: p.instagram_business_account.id, username: p.instagram_business_account.username }
+      ? {
+          id: p.instagram_business_account.id,
+          username: p.instagram_business_account.username,
+          picture: p.instagram_business_account.profile_picture_url || null,
+        }
       : null,
   }));
   if (!pages.length) {
     throw new Error('No Facebook Pages found. While logging in, tick your Page (and its Instagram account) when Facebook asks which ones to allow.');
   }
 
-  // Remember which permissions were actually granted (e.g. whether deleting is allowed).
+  // Which permissions were actually granted (e.g. whether deleting is allowed).
   let permissions = [];
   try {
     const perms = await graphGet('/me/permissions', { access_token: long.access_token });
@@ -128,16 +133,27 @@ export async function metaHandleCallback(code) {
   } catch {
     /* optional */
   }
-
-  await updateAccounts((all) => {
-    const previous = all.meta?.selectedPageId;
-    const selected = pages.find((p) => p.id === previous) || pages.find((p) => p.ig) || pages[0];
-    return { meta: { pages, permissions, selectedPageId: selected.id, connectedAt: new Date().toISOString() } };
-  });
+  return { pages, permissions };
 }
 
-export function instagramCanDelete(accounts) {
-  return Boolean(accounts.meta?.permissions?.includes('instagram_manage_contents'));
+// A channel (Instagram account or Facebook Page) -> the page object the functions below use.
+export function pageFromChannel(channel) {
+  const s = channel.secret || {};
+  return {
+    id: s.pageId || channel.info?.pageId || channel.externalId,
+    name: channel.info?.pageName || channel.name,
+    accessToken: s.pageToken,
+    permissions: channel.info?.permissions || [],
+    ig: channel.platform === 'instagram' ? { id: channel.externalId, username: channel.username } : null,
+  };
+}
+
+export function instagramCanDelete(channel) {
+  return Boolean(channel?.info?.permissions?.includes('instagram_manage_contents'));
+}
+
+export function instagramCanSeeViews(channel) {
+  return Boolean(channel?.info?.permissions?.includes('instagram_manage_insights'));
 }
 
 async function graphDelete(path, token) {
@@ -160,48 +176,36 @@ export function facebookIdFromUrl(url) {
   return m ? m[1] : null;
 }
 
-// Uses the Page saved with the upload (pageId), so it still works after switching Pages.
-async function pageForDelete(pageId) {
-  const accounts = await getAccounts();
-  const pages = accounts.meta?.pages || [];
-  return { accounts, page: pages.find((p) => p.id === pageId) || pageFromAccounts(accounts) };
+export async function deleteFacebookPost(page, id) {
+  return graphDelete(`/${id}`, page.accessToken);
 }
 
-export async function deleteFacebookVideo(videoId, pageId) {
-  const { page } = await pageForDelete(pageId);
-  if (!page) throw new Error('Facebook is not connected');
-  return graphDelete(`/${videoId}`, page.accessToken);
-}
-
-export async function deleteInstagramMedia(mediaId, pageId) {
-  const { accounts, page } = await pageForDelete(pageId);
-  if (!page) throw new Error('Instagram is not connected');
-  if (!instagramCanDelete(accounts)) {
-    throw new Error('Instagram-ൽ delete ചെയ്യാൻ permission ഇല്ല. Instagram "Reconnect" ചെയ്ത് വീണ്ടും ശ്രമിക്കൂ.');
+export async function deleteInstagramMedia(page, mediaId) {
+  if (!page.permissions.includes('instagram_manage_contents')) {
+    throw new Error('Instagram-ൽ delete ചെയ്യാൻ permission ഇല്ല. Channels-ൽ ഈ Instagram "Reconnect" ചെയ്ത് വീണ്ടും ശ്രമിക്കൂ.');
   }
   return graphDelete(`/${mediaId}`, page.accessToken);
 }
 
-export function pageFromAccounts(accounts) {
-  const meta = accounts.meta;
-  if (!meta) return null;
-  return meta.pages.find((p) => p.id === meta.selectedPageId) || null;
-}
-
-export async function selectedPage() {
-  return pageFromAccounts(await getAccounts());
-}
-
-export async function selectPage(pageId) {
-  let found = true;
-  await updateAccounts((all) => {
-    if (!all.meta || !all.meta.pages.some((p) => p.id === pageId)) {
-      found = false;
-      return {};
+// Likes / comments (and views when allowed) for one Instagram post.
+export async function instagramPostStats(page, mediaId) {
+  const basic = await graphGet(`/${mediaId}`, { fields: 'like_count,comments_count', access_token: page.accessToken });
+  const stats = { likes: basic.like_count ?? null, comments: basic.comments_count ?? null, views: null };
+  if (page.permissions.includes('instagram_manage_insights')) {
+    for (const metric of ['views', 'plays']) {
+      try {
+        const ins = await graphGet(`/${mediaId}/insights`, { metric, access_token: page.accessToken });
+        const value = ins.data?.[0]?.values?.[0]?.value ?? ins.data?.[0]?.total_value?.value;
+        if (value != null) {
+          stats.views = Number(value);
+          break;
+        }
+      } catch {
+        /* try the next metric name */
+      }
     }
-    return { meta: { ...all.meta, selectedPageId: pageId } };
-  });
-  if (!found) throw new Error('Unknown page');
+  }
+  return stats;
 }
 
 // ---------------- Facebook ----------------
@@ -235,8 +239,7 @@ async function facebookReel(page, { filePath, description }) {
   return { id: start.video_id, url: `https://www.facebook.com/reel/${start.video_id}` };
 }
 
-export async function uploadToFacebook({ filePath, title, description, isShort }, onStatus) {
-  const page = await selectedPage();
+export async function uploadToFacebook(page, { filePath, title, description, isShort }, onStatus) {
   if (!page) throw new Error('Facebook is not connected');
 
   if (!isShort) {
@@ -256,8 +259,7 @@ export async function uploadToFacebook({ filePath, title, description, isShort }
 
 // ---------------- Instagram ----------------
 
-export async function uploadToInstagram({ filePath, caption, publicVideoUrl, shareToFeed = true }, onStatus) {
-  const page = await selectedPage();
+export async function uploadToInstagram(page, { filePath, caption, publicVideoUrl, shareToFeed = true }, onStatus) {
   if (!page) throw new Error('Facebook/Instagram is not connected');
   if (!page.ig) throw new Error(`The Page "${page.name}" has no Instagram Business/Creator account linked`);
 
@@ -332,4 +334,100 @@ export async function uploadToInstagram({ filePath, caption, publicVideoUrl, sha
     /* permalink is optional */
   }
   return { id: published.id, url, pageId: page.id, account: page.ig.username };
+}
+
+// ---------------- Instagram photo / carousel ----------------
+
+// Waits until Instagram has finished processing a container (videos take a while; photos are quick).
+async function waitForContainer(id, token, onStatus, label = 'Instagram is processing') {
+  const deadline = Date.now() + 15 * 60 * 1000;
+  while (true) {
+    const s = await graphGet(`/${id}`, { fields: 'status_code,status', access_token: token });
+    if (s.status_code === 'FINISHED' || !s.status_code) return;
+    if (s.status_code === 'ERROR' || s.status_code === 'EXPIRED') {
+      throw new Error(`Instagram could not process the file: ${s.status || s.status_code}`);
+    }
+    if (Date.now() > deadline) throw new Error('Instagram took too long to process the files');
+    onStatus?.(label);
+    await sleep(4000);
+  }
+}
+
+// items: [{ kind: 'image' | 'video', url }] — 1 item = single photo post, 2–10 = carousel.
+export async function publishInstagramMedia(page, { items, caption }, onStatus) {
+  if (!page) throw new Error('Facebook/Instagram is not connected');
+  if (!page.ig) throw new Error(`The Page "${page.name}" has no Instagram Business/Creator account linked`);
+  const token = page.accessToken;
+  const igId = page.ig.id;
+  const text = (caption || '').slice(0, 2200);
+
+  let container;
+  if (items.length === 1 && items[0].kind === 'image') {
+    onStatus?.('Instagram is fetching the photo');
+    container = await graphPost(`/${igId}/media`, { image_url: items[0].url, caption: text, access_token: token });
+    await waitForContainer(container.id, token, onStatus);
+  } else {
+    // Each photo/video becomes a carousel item first.
+    const children = [];
+    for (const [n, item] of items.entries()) {
+      onStatus?.(`Instagram is fetching item ${n + 1} of ${items.length}`);
+      const params =
+        item.kind === 'video'
+          ? { media_type: 'VIDEO', video_url: item.url, is_carousel_item: 'true', access_token: token }
+          : { image_url: item.url, is_carousel_item: 'true', access_token: token };
+      const child = await graphPost(`/${igId}/media`, params);
+      children.push(child.id);
+    }
+    for (const [n, id] of children.entries()) {
+      await waitForContainer(id, token, onStatus, `Instagram is processing item ${n + 1} of ${children.length}`);
+    }
+    onStatus?.('Building the carousel');
+    container = await graphPost(`/${igId}/media`, {
+      media_type: 'CAROUSEL',
+      children: children.join(','),
+      caption: text,
+      access_token: token,
+    });
+    await waitForContainer(container.id, token, onStatus);
+  }
+
+  onStatus?.('Publishing on Instagram');
+  const published = await graphPost(`/${igId}/media_publish`, { creation_id: container.id, access_token: token });
+  let url = `https://www.instagram.com/${page.ig.username}/`;
+  try {
+    const info = await graphGet(`/${published.id}`, { fields: 'permalink', access_token: token });
+    if (info.permalink) url = info.permalink;
+  } catch {
+    /* permalink is optional */
+  }
+  return { id: published.id, url, pageId: page.id, account: page.ig.username };
+}
+
+// ---------------- Facebook Page photos ----------------
+
+// items: photos only. 1 photo = photo post; several = one post with all photos attached.
+export async function publishFacebookPhotos(page, { items, caption }, onStatus) {
+  if (!page) throw new Error('Facebook is not connected');
+  const token = page.accessToken;
+  const photos = items.filter((i) => i.kind === 'image');
+  if (!photos.length) throw new Error('Facebook: no photos to post');
+
+  if (photos.length === 1) {
+    onStatus?.('Posting photo to Facebook Page');
+    const r = await graphPost(`/${page.id}/photos`, { url: photos[0].url, caption: caption || '', access_token: token });
+    const id = r.post_id || r.id;
+    return { id, url: `https://www.facebook.com/${id}`, pageId: page.id };
+  }
+
+  const ids = [];
+  for (const [n, photo] of photos.entries()) {
+    onStatus?.(`Uploading photo ${n + 1} of ${photos.length} to Facebook`);
+    const r = await graphPost(`/${page.id}/photos`, { url: photo.url, published: 'false', access_token: token });
+    ids.push(r.id);
+  }
+  onStatus?.('Publishing Facebook post');
+  const params = { message: caption || '', access_token: token };
+  ids.forEach((id, i) => (params[`attached_media[${i}]`] = JSON.stringify({ media_fbid: id })));
+  const post = await graphPost(`/${page.id}/feed`, params);
+  return { id: post.id, url: `https://www.facebook.com/${post.id}`, pageId: page.id };
 }

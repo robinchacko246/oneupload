@@ -12,6 +12,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.2.1",
     "@vercel/blob": "^2.9.0",
     "@vercel/functions": "^3.11.4",
     "dotenv": "^16.4.5",

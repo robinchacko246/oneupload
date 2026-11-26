@@ -1,123 +1,84 @@
-// Views / likes / comments for posts made through the app.
-import { google } from 'googleapis';
-import { config } from './config.js';
-import { getAccounts } from './store.js';
+// Views / likes / comments for one user's posts, per connected channel.
+import * as db from './db.js';
+import { youtubeIdFromUrl, youtubeStats } from './youtube.js';
+import { instagramCanSeeViews, instagramPostStats, pageFromChannel } from './meta.js';
 
-const GRAPH = () => `https://graph.facebook.com/${config.meta.version}`;
 const CACHE_MS = 10 * 60 * 1000; // stats change slowly; keep API calls low
-let cache = { at: 0, data: null };
+const cache = new Map(); // userId -> { at, data }
 
-function youtubeIdFrom(entry) {
-  if (entry?.postId) return entry.postId;
-  const m = String(entry?.url || '').match(/(?:shorts\/|youtu\.be\/|[?&]v=)([\w-]{6,})/);
-  return m ? m[1] : null;
-}
+export async function getAnalytics(userId, refresh = false) {
+  const hit = cache.get(userId);
+  if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.data;
 
-async function youtubeStats(ids, account) {
-  const out = {};
-  if (!ids.length || !account) return out;
-  const client = new google.auth.OAuth2(config.google.clientId, config.google.clientSecret, config.google.redirectUri);
-  client.setCredentials(account.tokens);
-  const yt = google.youtube({ version: 'v3', auth: client });
-  for (let i = 0; i < ids.length; i += 50) {
-    const res = await yt.videos.list({ part: ['statistics'], id: ids.slice(i, i + 50) });
-    for (const v of res.data.items || []) {
-      out[v.id] = {
-        views: Number(v.statistics?.viewCount || 0),
-        likes: Number(v.statistics?.likeCount || 0),
-        comments: Number(v.statistics?.commentCount || 0),
-      };
+  const [posts, channelRows] = await Promise.all([db.listPosts(userId, 200), db.listChannels(userId)]);
+  const channels = Object.fromEntries(channelRows.map((c) => [c.id, db.withSecret(c)]));
+  const posted = posts.filter((p) => p.status === 'posted').slice(0, 100);
+  const live = (t) => t?.state === 'done' && !t.deleted;
+
+  // YouTube: one stats call per channel for all its videos.
+  const ytIds = new Map(); // channelId -> [videoIds]
+  for (const p of posted) {
+    for (const [cid, t] of Object.entries(p.targets)) {
+      if (t.platform !== 'youtube' || !live(t)) continue;
+      const vid = t.postId || youtubeIdFromUrl(t.url);
+      if (vid) ytIds.set(cid, [...(ytIds.get(cid) || []), vid]);
     }
   }
-  return out;
-}
-
-async function graphGet(path, params) {
-  const url = new URL(`${GRAPH()}${path}`);
-  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const res = await fetch(url);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.error) throw new Error(data.error?.message || `HTTP ${res.status}`);
-  return data;
-}
-
-async function instagramStats(entries, accounts) {
-  const out = {};
-  const pages = accounts.meta?.pages || [];
-  const canInsights = accounts.meta?.permissions?.includes('instagram_manage_insights');
+  const errors = [];
+  const ytStats = {};
   await Promise.all(
-    entries.map(async (e) => {
-      const page = pages.find((p) => p.id === e.pageId) || pages.find((p) => p.id === accounts.meta?.selectedPageId);
-      if (!page) return;
-      const token = page.accessToken;
+    [...ytIds.entries()].map(async ([cid, ids]) => {
+      if (!channels[cid]) return;
       try {
-        const basic = await graphGet(`/${e.postId}`, { fields: 'like_count,comments_count', access_token: token });
-        const stats = { likes: basic.like_count ?? null, comments: basic.comments_count ?? null, views: null };
-        if (canInsights) {
-          // "views" on newer API versions, "plays" on older ones.
-          for (const metric of ['views', 'plays']) {
-            try {
-              const ins = await graphGet(`/${e.postId}/insights`, { metric, access_token: token });
-              const value = ins.data?.[0]?.values?.[0]?.value ?? ins.data?.[0]?.total_value?.value;
-              if (value != null) {
-                stats.views = Number(value);
-                break;
-              }
-            } catch {
-              /* try the next metric name */
-            }
-          }
-        }
-        out[e.postId] = stats;
+        Object.assign(ytStats, await youtubeStats(channels[cid], ids));
       } catch (err) {
-        out[e.postId] = { error: /does not exist|cannot be loaded/i.test(err.message) ? 'deleted' : err.message };
+        errors.push(`${channels[cid].name}: ${err.message}`);
       }
     }),
   );
-  return out;
-}
 
-export async function getAnalytics(jobs, refresh = false) {
-  if (!refresh && cache.data && Date.now() - cache.at < CACHE_MS) return cache.data;
-  const accounts = await getAccounts();
-  const posted = jobs.filter((j) => (j.status || 'posted') === 'posted').slice(0, 100);
-
-  const ytIds = posted
-    .map((j) => j.platforms?.youtube)
-    .filter((p) => p?.state === 'done' && !p.deleted)
-    .map(youtubeIdFrom)
-    .filter(Boolean);
-  const igEntries = posted
-    .map((j) => j.platforms?.instagram)
-    .filter((p) => p?.state === 'done' && !p.deleted && p.postId);
-
-  const [yt, ig] = await Promise.all([
-    youtubeStats(ytIds, accounts.youtube).catch((err) => ({ _error: err.message })),
-    instagramStats(igEntries, accounts).catch((err) => ({ _error: err.message })),
-  ]);
+  // Instagram: one call per post.
+  const igStats = {};
+  await Promise.all(
+    posted.flatMap((p) =>
+      Object.entries(p.targets)
+        .filter(([cid, t]) => t.platform === 'instagram' && live(t) && t.postId && channels[cid])
+        .map(async ([cid, t]) => {
+          try {
+            igStats[t.postId] = await instagramPostStats(pageFromChannel(channels[cid]), t.postId);
+          } catch (err) {
+            igStats[t.postId] = { error: /does not exist|cannot be loaded/i.test(err.message) ? 'deleted' : err.message };
+          }
+        }),
+    ),
+  );
 
   const rows = posted
-    .map((j) => {
-      const row = { id: j.id, title: (j.caption || '').split('\n')[0] || j.fileName, createdAt: j.postedAt || j.createdAt, type: j.type };
-      const y = j.platforms?.youtube;
-      if (y?.state === 'done' && !y.deleted) row.youtube = { url: y.url, ...(yt[youtubeIdFrom(y)] || {}) };
-      const i = j.platforms?.instagram;
-      if (i?.state === 'done' && !i.deleted) row.instagram = { url: i.url, ...(i.postId ? ig[i.postId] || {} : { note: 'old post' }) };
-      return row;
+    .map((p) => {
+      const lines = Object.entries(p.targets)
+        .filter(([, t]) => live(t) && t.platform !== 'facebook')
+        .map(([cid, t]) => {
+          const stats = t.platform === 'youtube' ? ytStats[t.postId || youtubeIdFromUrl(t.url)] : t.postId ? igStats[t.postId] : { note: 'old post' };
+          return { channelId: cid, platform: t.platform, channelName: t.channelName, url: t.url, ...(stats || {}) };
+        });
+      return { id: p.id, title: (p.caption || '').split('\n')[0] || p.fileName, createdAt: p.postedAt || p.createdAt, type: p.type, lines };
     })
-    .filter((r) => r.youtube || r.instagram);
+    .filter((r) => r.lines.length);
 
-  const sum = (platform, key) => rows.reduce((n, r) => n + (Number(r[platform]?.[key]) || 0), 0);
+  const totals = {};
+  for (const platform of ['youtube', 'instagram']) {
+    const ls = rows.flatMap((r) => r.lines.filter((l) => l.platform === platform));
+    const sum = (k) => ls.reduce((n, l) => n + (Number(l[k]) || 0), 0);
+    totals[platform] = { posts: ls.length, views: sum('views'), likes: sum('likes'), comments: sum('comments') };
+  }
+
   const data = {
     updatedAt: new Date().toISOString(),
-    totals: {
-      youtube: { posts: rows.filter((r) => r.youtube).length, views: sum('youtube', 'views'), likes: sum('youtube', 'likes'), comments: sum('youtube', 'comments') },
-      instagram: { posts: rows.filter((r) => r.instagram).length, views: sum('instagram', 'views'), likes: sum('instagram', 'likes'), comments: sum('instagram', 'comments') },
-    },
-    instagramViews: Boolean(accounts.meta?.permissions?.includes('instagram_manage_insights')),
-    errors: [yt._error && `YouTube: ${yt._error}`, ig._error && `Instagram: ${ig._error}`].filter(Boolean),
+    totals,
+    instagramViews: channelRows.filter((c) => c.platform === 'instagram').some((c) => instagramCanSeeViews(c)),
+    errors,
     rows,
   };
-  cache = { at: Date.now(), data };
+  cache.set(userId, { at: Date.now(), data });
   return data;
 }

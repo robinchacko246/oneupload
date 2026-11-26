@@ -48,84 +48,190 @@ function showBanner(text, isError = false) {
 }
 const params = new URLSearchParams(location.search);
 if (params.get('error')) showBanner(params.get('error'), true);
-else if (params.get('connected')) showBanner(`${params.get('connected') === 'youtube' ? 'YouTube' : 'Instagram'} connected ✓`);
-if (params.size) history.replaceState(null, '', '/');
+else if (params.get('connected')) showBanner(`${params.get('connected')} connected ✓`);
+const pendingPick = params.get('pick');
+if (params.size) history.replaceState(null, '', `/${location.hash}`);
 
 $('#logout').addEventListener('click', async () => {
   await fetch(api('/api/logout'), { method: 'POST' });
   location.href = '/login.html';
 });
 
-// ---------- accounts ----------
+// ---------- user & channels ----------
 let status = {};
+let channels = [];
+const chanById = (id) => channels.find((c) => c.id === id);
+
+// Round avatar with a small platform badge. `c` is a channel or a post target.
+function avatar(c, size = '') {
+  const platform = c.platform;
+  const name = c.name || c.channelName || NAMES[platform] || '?';
+  const letter = esc(name.replace(/^@/, '').slice(0, 1).toUpperCase() || '?');
+  const img = c.avatar
+    ? `<img src="${esc(c.avatar)}" alt="" referrerpolicy="no-referrer" data-letter="${letter}" />`
+    : `<span class="ph">${letter}</span>`;
+  return `<span class="cav ${size}" title="${esc(name)} · ${NAMES[platform] || ''}">${img}<span class="pi pb ${PI_CLASS[platform]}">${ICONS[platform] || ''}</span></span>`;
+}
+
+// Profile pictures from Instagram/Facebook links expire: fall back to the first letter.
+document.addEventListener(
+  'error',
+  (e) => {
+    const img = e.target;
+    if (img.tagName !== 'IMG' || !img.closest('.cav')) return;
+    const ph = document.createElement('span');
+    ph.className = 'ph';
+    ph.textContent = img.dataset.letter || '?';
+    img.replaceWith(ph);
+  },
+  true,
+);
+
+const channelLabel = (c) => (c.platform === 'instagram' ? `@${c.username || c.name}` : c.name);
 
 async function loadStatus() {
   const s = await apiFetch('/api/status').then((r) => r.json());
   status = s;
+  channels = s.channels || [];
   if (s.storageWarning) showBanner(s.storageWarning, true);
-
-  const yt = $('#acc-youtube');
-  const ytWho = yt.querySelector('.who');
-  yt.querySelectorAll('.actions').forEach((n) => n.remove());
-  if (!s.youtube.configured) {
-    ytWho.innerHTML = `<b>YouTube</b><small>.env-ൽ Google keys ചേർക്കണം</small>`;
-  } else if (!s.youtube.connected) {
-    ytWho.innerHTML = `<b>YouTube</b><span class="chip off"><span class="dot"></span>Not connected</span>`;
-    yt.insertAdjacentHTML('beforeend', `<div class="actions"><a class="btn connect-yt" href="/auth/google">Connect YouTube</a></div>`);
-  } else {
-    ytWho.innerHTML = `<b>${esc(s.youtube.channelTitle)}</b><span class="chip"><span class="dot"></span>Connected</span>`;
-    yt.insertAdjacentHTML(
-      'beforeend',
-      `<div class="actions"><a class="btn small" href="/auth/google">Reconnect</a><button class="btn small ghost" data-disconnect="youtube">Disconnect</button></div>`,
-    );
-  }
-
-  const meta = $('#acc-meta');
-  const metaWho = meta.querySelector('.who');
-  meta.querySelectorAll('.actions, select').forEach((n) => n.remove());
-  if (!s.meta.configured) {
-    metaWho.innerHTML = `<b>Instagram</b><small>.env-ൽ Meta keys ചേർക്കണം</small>`;
-  } else if (!s.meta.connected) {
-    metaWho.innerHTML = `<b>Instagram</b><span class="chip off"><span class="dot"></span>Not connected</span>`;
-    meta.insertAdjacentHTML(
-      'beforeend',
-      `<div class="actions"><a class="btn connect-ig" href="/auth/facebook">Connect Instagram</a><small class="muted" style="align-self:center">Facebook login വഴി</small></div>`,
-    );
-  } else {
-    metaWho.innerHTML = s.meta.igUsername
-      ? `<b>@${esc(s.meta.igUsername)}</b><span class="chip"><span class="dot"></span>Connected · ${esc(s.meta.pageName)}</span>`
-      : `<b>${esc(s.meta.pageName)}</b><span class="chip warn"><span class="dot"></span>ഈ Page-ന് Instagram link ഇല്ല</span>`;
-    if (s.meta.pages.length > 1) {
-      const options = s.meta.pages
-        .map(
-          (p) =>
-            `<option value="${esc(p.id)}" ${p.id === s.meta.selectedPageId ? 'selected' : ''}>${p.igUsername ? `@${esc(p.igUsername)} · ` : ''}${esc(p.name)}</option>`,
-        )
-        .join('');
-      meta.insertAdjacentHTML('beforeend', `<select id="pageSelect" aria-label="Instagram account">${options}</select>`);
-      $('#pageSelect').addEventListener('change', async (e) => {
-        await apiFetch('/api/meta/page', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pageId: e.target.value }),
-        });
-        loadStatus();
-      });
-    }
-    meta.insertAdjacentHTML(
-      'beforeend',
-      `<div class="actions"><a class="btn small" href="/auth/facebook">Reconnect</a><button class="btn small ghost" data-disconnect="meta">Disconnect</button></div>`,
-    );
-  }
-
-  $$('[data-disconnect]').forEach((b) =>
-    b.addEventListener('click', async () => {
-      if (!confirm('Disconnect this account?')) return;
-      await apiFetch(`/api/disconnect/${b.dataset.disconnect}`, { method: 'POST' });
-      loadStatus();
-    }),
-  );
+  const who = s.user?.name || s.user?.email || '';
+  $('#meName').textContent = who;
+  $('#meAvatar').textContent = (who.trim()[0] || '?').toUpperCase();
+  $('#channelCount').hidden = !channels.length;
+  $('#channelCount').textContent = channels.length;
+  renderChannelPicker();
+  renderChannelMini();
+  renderChannelList();
+  if (!channels.length && !location.hash) location.hash = '#channels';
 }
+
+function renderChannelMini() {
+  $('#channelMini').innerHTML = channels.length
+    ? channels.map((c) => avatar(c)).join('') + `<a class="btn small" href="#channels">＋ Add</a>`
+    : `<div class="empty" style="padding:8px">Channels ഒന്നുമില്ല. <a href="#channels">ചേർക്കൂ →</a></div>`;
+}
+
+// ---------- composer: which channels to post to (remembered per device) ----------
+const CHANNEL_KEY = 'oneupload.channels';
+function savedChannelIds() {
+  try {
+    const v = JSON.parse(localStorage.getItem(CHANNEL_KEY));
+    return Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderChannelPicker() {
+  const box = $('#channelPicker');
+  if (!channels.length) {
+    box.innerHTML = '<div class="picker-empty">ആദ്യം ഒരു channel ചേർക്കൂ → <a href="#channels">Channels</a></div>';
+    return updatePickedCount();
+  }
+  const saved = savedChannelIds();
+  box.innerHTML = channels
+    .map((c) => {
+      const on = saved ? saved.includes(c.id) : c.platform !== 'facebook';
+      return `<label class="chpick" title="${esc(channelLabel(c))}">
+        <input type="checkbox" name="channels" value="${esc(c.id)}" data-platform="${c.platform}" ${on ? 'checked' : ''} />
+        ${avatar(c)}<span class="tick">✓</span><small>${esc(channelLabel(c))}</small>
+      </label>`;
+    })
+    .join('');
+  if (photoMode()) setPhotoUi(true);
+  updatePickedCount();
+}
+
+function pickedChannels() {
+  return $$('input[name=channels]:checked:not(:disabled)').map((i) => chanById(i.value)).filter(Boolean);
+}
+
+function updatePickedCount() {
+  const n = pickedChannels().length;
+  $('#pickedCount').textContent = channels.length ? `· ${n} / ${channels.length} selected` : '';
+}
+
+$('#channelPicker').addEventListener('change', () => {
+  const ticked = $$('input[name=channels]:checked').map((x) => x.value);
+  localStorage.setItem(CHANNEL_KEY, JSON.stringify(ticked));
+  updatePickedCount();
+});
+
+// ---------- Channels page ----------
+function renderChannelList() {
+  const order = { youtube: 0, instagram: 1, facebook: 2 };
+  const list = [...channels].sort((a, b) => order[a.platform] - order[b.platform]);
+  $('#channelList').innerHTML = list.length
+    ? list
+        .map((c) => {
+          const reconnect = c.platform === 'youtube' ? '/auth/google' : '/auth/facebook';
+          const sub = [NAMES[c.platform], c.platform === 'instagram' && c.info?.pageName ? `Page: ${c.info.pageName}` : '', c.canDelete ? '' : '⚠️ delete permission ഇല്ല — Reconnect ചെയ്യൂ']
+            .filter(Boolean)
+            .join(' · ');
+          return `<div class="chrow">${avatar(c)}
+            <span class="txt"><b>${esc(channelLabel(c))}</b><small>${esc(sub)}</small></span>
+            <span class="acts"><a class="btn small" href="${reconnect}">Reconnect</a>
+              <button class="btn small ghost" data-remove-channel="${esc(c.id)}">Remove</button></span>
+          </div>`;
+        })
+        .join('')
+    : '<div class="empty"><span class="big">🔗</span>ഇതുവരെ channels ഇല്ല. മുകളിൽ നിന്ന് YouTube / Instagram / Facebook ചേർക്കൂ.</div>';
+}
+
+$('#channelList').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-remove-channel]');
+  if (!btn) return;
+  const c = chanById(btn.dataset.removeChannel);
+  const ok = await askConfirm({
+    icon: avatar(c),
+    title: `${channelLabel(c)} മാറ്റണോ?`,
+    text: 'ഈ channel app-ൽ നിന്ന് മാറും. ഇതിനകം post ചെയ്തവ അവിടെ തന്നെ ഉണ്ടാവും. Schedule ചെയ്തവ ഈ channel-ലേക്ക് പോവില്ല.',
+    yes: 'Remove',
+  });
+  if (!ok) return;
+  await apiFetch(`/api/channels/${encodeURIComponent(c.id)}/delete`, { method: 'POST' });
+  toast('Channel removed');
+  loadStatus();
+});
+
+// After Facebook login: choose which Instagram accounts / Pages to add.
+async function openPicker(id) {
+  const res = await apiFetch(`/api/connect/${encodeURIComponent(id)}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return showBanner(data.error || 'Could not load accounts', true);
+  const row = (kind, value, title, sub, pic, connected) => `
+    <label class="pick-row ${connected ? 'disabled' : ''}">
+      <input type="checkbox" name="pick-${kind}" value="${esc(value)}" ${connected ? 'checked disabled' : kind === 'instagram' ? 'checked' : ''} />
+      ${avatar({ platform: kind, name: title, avatar: pic })}
+      <span class="txt"><b>${esc(title)}</b><small>${esc(sub)}${connected ? ' · already added' : ''}</small></span>
+    </label>`;
+  $('#pickerList').innerHTML =
+    data.options
+      .map(
+        (o) =>
+          (o.ig ? row('instagram', o.ig.id, `@${o.ig.username}`, `Instagram · ${o.pageName}`, o.ig.picture, o.ig.connected) : '') +
+          row('facebook', o.pageId, o.pageName, 'Facebook Page', o.pagePicture, o.pageConnected),
+      )
+      .join('') || '<div class="empty">Accounts ഒന്നും കിട്ടിയില്ല</div>';
+  $('#picker').hidden = false;
+  $('#pickerForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const pick = (kind) => $$(`input[name=pick-${kind}]:checked:not(:disabled)`).map((i) => i.value);
+    const r = await apiFetch(`/api/connect/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instagram: pick('instagram'), facebook: pick('facebook') }),
+    });
+    const out = await r.json().catch(() => ({}));
+    $('#picker').hidden = true;
+    if (!r.ok) return toast(out.error || 'Could not add', true);
+    toast(out.added ? `${out.added} channel${out.added > 1 ? 's' : ''} added ✓` : 'Updated ✓');
+    loadStatus();
+  };
+}
+$('#pickerCancel').addEventListener('click', () => ($('#picker').hidden = true));
+
+
 
 // ---------- file picking ----------
 const drop = $('#drop');
@@ -155,53 +261,132 @@ function showFile(file) {
 }
 
 function clearFile() {
+  picked = [];
+  thumbUrls.forEach((u) => URL.revokeObjectURL(u));
+  thumbUrls = [];
   drop.classList.remove('has-file');
   $('#dropEmpty').hidden = false;
   $('#dropFile').hidden = true;
+  $('#mediaGrid').hidden = true;
   preview.pause();
   preview.removeAttribute('src');
   input.value = '';
+  setPhotoUi(false);
 }
+
+// ---------- picked files: one video, or 1–10 photos/videos (carousel) ----------
+let picked = [];
+let thumbUrls = [];
+let addingMore = false;
+const isImage = (f) => f.type.startsWith('image/');
+const isVideo = (f) => f.type.startsWith('video/');
+const photoMode = () => picked.length > 1 || (picked.length === 1 && isImage(picked[0]));
+
+function takeFiles(files) {
+  let list = [...files].filter((f) => isImage(f) || isVideo(f));
+  if (!list.length) return toast('Video അല്ലെങ്കിൽ photo തിരഞ്ഞെടുക്കൂ', true);
+  if (addingMore) list = [...picked, ...list];
+  addingMore = false;
+  if (list.length > 10) toast('Carousel-ൽ പരമാവധി 10 items. ആദ്യത്തെ 10 എടുത്തു', true);
+  picked = list.slice(0, 10);
+  renderPicked();
+}
+
+// Photo posts can't go to YouTube, so its tile is switched off while photos are picked.
+function setPhotoUi(on) {
+  // YouTube channels can't take photo posts: switch them off while photos are picked.
+  $$('input[name=channels][data-platform=youtube]').forEach((i) => {
+    i.disabled = on;
+    i.closest('.chpick').title = on ? 'YouTube photo posts സ്വീകരിക്കില്ല' : channelLabel(chanById(i.value) || {});
+  });
+  updatePickedCount?.();
+  document.querySelector('input[name=type][value=photo]').disabled = !on;
+  $$('input[name=type]:not([value=photo])').forEach((r) => (r.disabled = on));
+  if (on) document.querySelector('input[name=type][value=photo]').checked = true;
+  else if (document.querySelector('input[name=type][value=photo]').checked) {
+    document.querySelector('input[name=type][value=reel]').checked = true;
+  }
+}
+
+function renderPicked() {
+  thumbUrls.forEach((u) => URL.revokeObjectURL(u));
+  thumbUrls = [];
+  if (!picked.length) return clearFile();
+  drop.classList.add('has-file');
+  $('#dropEmpty').hidden = true;
+  if (!photoMode()) {
+    $('#mediaGrid').hidden = true;
+    setPhotoUi(false);
+    showFile(picked[0]);
+    return;
+  }
+  $('#dropFile').hidden = true;
+  preview.pause();
+  setPhotoUi(true);
+  const total = picked.reduce((n, f) => n + f.size, 0);
+  const grid = $('#mediaGrid');
+  grid.hidden = false;
+  grid.innerHTML =
+    picked
+      .map((f, i) => {
+        const url = URL.createObjectURL(f);
+        thumbUrls.push(url);
+        const media = isVideo(f) ? `<video src="${url}" muted playsinline></video><span class="vbadge">▶</span>` : `<img src="${url}" alt="" />`;
+        return `<div class="thumb">${media}<span class="num">${i + 1}</span>
+          <div class="tbtns">
+            <button type="button" data-move="${i}" data-dir="-1" ${i === 0 ? 'disabled' : ''} aria-label="Move left">‹</button>
+            <button type="button" data-drop="${i}" aria-label="Remove">✕</button>
+            <button type="button" data-move="${i}" data-dir="1" ${i === picked.length - 1 ? 'disabled' : ''} aria-label="Move right">›</button>
+          </div></div>`;
+      })
+      .join('') +
+    (picked.length < 10 ? '<button type="button" class="thumb add" data-add="1">＋<small>Add</small></button>' : '') +
+    `<div class="grid-info">${picked.length === 1 ? 'Photo post' : `Carousel · ${picked.length} items`} · ${mb(total)}${
+      total > (status.maxVideoBytes || Infinity) ? ' · <b style="color:var(--err)">300 MB-യിൽ കൂടുതൽ</b>' : ''
+    }<br><small class="muted">Instagram-നായി photos 4:5 – 1.91:1 ratio-യിലേക്ക് crop ചെയ്യും</small></div>`;
+}
+
+$('#mediaGrid').addEventListener('click', (e) => {
+  e.preventDefault(); // don't let the surrounding label open the file picker
+  const move = e.target.closest('[data-move]');
+  const del = e.target.closest('[data-drop]');
+  const add = e.target.closest('[data-add]');
+  if (move) {
+    const i = Number(move.dataset.move);
+    const j = i + Number(move.dataset.dir);
+    [picked[i], picked[j]] = [picked[j], picked[i]];
+    renderPicked();
+  } else if (del) {
+    picked.splice(Number(del.dataset.drop), 1);
+    renderPicked();
+  } else if (add) {
+    addingMore = true;
+    input.click();
+  }
+});
 
 $('#change').addEventListener('click', (e) => {
   e.preventDefault();
   input.click();
 });
-input.addEventListener('change', () => showFile(input.files[0]));
+input.addEventListener('change', () => {
+  if (input.files.length) takeFiles(input.files);
+  else addingMore = false;
+  input.value = '';
+});
 ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
 drop.addEventListener('drop', (e) => {
-  const file = e.dataTransfer.files[0];
-  if (!file) return;
-  const dt = new DataTransfer();
-  dt.items.add(file);
-  input.files = dt.files;
-  showFile(file);
+  if (e.dataTransfer.files.length) takeFiles(e.dataTransfer.files);
 });
 
 const caption = document.querySelector('textarea[name=caption]');
 caption.addEventListener('input', () => ($('#capCount').textContent = `${caption.value.length} / 2200`));
 
-// Remember which platforms were ticked last time (per device).
-const PLATFORM_KEY = 'oneupload.platforms';
-function restorePlatforms() {
-  let saved = null;
-  try { saved = JSON.parse(localStorage.getItem(PLATFORM_KEY)); } catch {}
-  if (!Array.isArray(saved)) return;
-  $$('input[name=platforms]').forEach((i) => (i.checked = saved.includes(i.value)));
-}
-$$('input[name=platforms]').forEach((i) =>
-  i.addEventListener('change', () => {
-    const ticked = $$('input[name=platforms]:checked').map((x) => x.value);
-    localStorage.setItem(PLATFORM_KEY, JSON.stringify(ticked));
-  }),
-);
-restorePlatforms();
-
 function resetForm(form) {
   form.reset();
-  restorePlatforms();
   clearFile();
+  renderChannelPicker();
   $('#capCount').textContent = '0 / 2200';
   updateWhen();
 }
@@ -214,16 +399,17 @@ const overlay = {
   jobId: null,
   timer: null,
 
-  open(platforms) {
+  // list: channels (or post targets) with { id, platform, name/channelName, avatar }.
+  open(list) {
     this.jobId = null;
     this.el.hidden = false;
     $('#orbit').classList.remove('done');
     $('#hideOverlay').hidden = true;
     $('#doneOverlay').hidden = true;
-    $('#targets').innerHTML = platforms
+    $('#targets').innerHTML = list
       .map(
-        (p) => `<div class="target waiting" data-p="${p}">
-          <span class="pi ${PI_CLASS[p]}">${ICONS[p]}<span class="badge">${ICONS.spin}</span></span>
+        (c) => `<div class="target waiting" data-p="${esc(c.id)}">
+          <span class="tav">${avatar(c)}<span class="badge">${ICONS.spin}</span></span>
           <small>Waiting</small></div>`,
       )
       .join('');
@@ -295,7 +481,7 @@ const overlay = {
     const finished = entries.length && entries.every(([, s]) => s.state === 'done' || s.state === 'error');
     if (!finished) {
       const running = entries.find(([, s]) => s.state === 'running');
-      if (running) $('#stageText').textContent = `${NAMES[running[0]]}: ${running[1].message || 'Working'}`;
+      if (running) $('#stageText').textContent = `${running[1].channelName || NAMES[running[1].platform]}: ${running[1].message || 'Working'}`;
       this.timer = setTimeout(() => this.poll(), 2000);
       return;
     }
@@ -310,7 +496,7 @@ const overlay = {
       confetti();
     } else {
       $('#center').innerHTML = `<div style="font-size:56px;line-height:1">⚠️</div>`;
-      $('#stageTitle').textContent = `${failed.map(([p]) => NAMES[p]).join(', ')} failed`;
+      $('#stageTitle').textContent = `${failed.map(([, s]) => s.channelName || NAMES[s.platform]).join(', ')} failed`;
       $('#stageText').textContent = failed[0][1].message || 'Something went wrong';
     }
     loadJobs();
@@ -364,26 +550,24 @@ function sendDirect(data, onProgress) {
 
 // Vercel: upload the video to Vercel Blob first (Vercel itself only accepts 4.5 MB per request),
 // then tell the server where it is.
-async function sendViaBlob(file, data, onProgress) {
+async function uploadToBlob(file, onProgress) {
   const { upload } = await import('https://esm.sh/@vercel/blob@2.9.0/client');
-  const safeName = file.name.replace(/[^\w.\-]+/g, '_') || 'video.mp4';
+  const safeName = file.name.replace(/[^\w.\-]+/g, '_') || 'file';
   const options = {
     handleUploadUrl: api('/api/blob-upload'),
     multipart: file.size > 20 * 1024 * 1024,
     contentType: file.type || 'video/mp4',
     onUploadProgress: ({ percentage }) => onProgress(percentage),
   };
-  let blob;
   try {
-    blob = await upload(`uploads/${safeName}`, file, { ...options, access: 'private' });
+    return await upload(`uploads/${safeName}`, file, { ...options, access: 'private' });
   } catch (err) {
     if (!/access|private|public/i.test(String(err?.message))) throw err;
-    blob = await upload(`uploads/${safeName}`, file, { ...options, access: 'public' });
+    return upload(`uploads/${safeName}`, file, { ...options, access: 'public' });
   }
-  const body = Object.fromEntries(data.entries());
-  delete body.video;
-  body.blobUrl = blob.url;
-  body.fileName = file.name;
+}
+
+async function postUpload(body) {
   const res = await apiFetch('/api/upload', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -394,19 +578,86 @@ async function sendViaBlob(file, data, onProgress) {
   return json;
 }
 
+// Instagram only takes JPEG photos with a width:height ratio between 4:5 and 1.91:1,
+// so photos are converted (and centre-cropped if needed) in the browser first.
+async function toInstagramJpeg(file) {
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    throw new Error(`"${file.name}" തുറക്കാൻ പറ്റിയില്ല (HEIC ആണെങ്കിൽ JPEG ആക്കി വീണ്ടും ശ്രമിക്കൂ)`);
+  }
+  let sx = 0;
+  let sy = 0;
+  let sw = bitmap.width;
+  let sh = bitmap.height;
+  const ratio = sw / sh;
+  if (ratio < 0.8) {
+    sh = Math.round(sw / 0.8);
+    sy = Math.round((bitmap.height - sh) / 2);
+  } else if (ratio > 1.91) {
+    sw = Math.round(sh * 1.91);
+    sx = Math.round((bitmap.width - sw) / 2);
+  }
+  const scale = Math.min(1, 1440 / sw);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(sw * scale);
+  canvas.height = Math.round(sh * scale);
+  canvas.getContext('2d').drawImage(bitmap, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+  return new File([blob], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' });
+}
+
+// Photo / carousel post: send each file, then tell the server the list.
+async function sendMedia(files, data, onProgress) {
+  const prepared = [];
+  for (const f of files) prepared.push(isImage(f) ? await toInstagramJpeg(f) : f);
+  const total = prepared.reduce((n, f) => n + f.size, 0) || 1;
+  if (!status.blobUploads) {
+    data.delete('video');
+    prepared.forEach((f) => data.append('media', f));
+    return sendDirect(data, onProgress);
+  }
+  let done = 0;
+  const media = [];
+  for (const f of prepared) {
+    const blob = await uploadToBlob(f, (pct) => onProgress(((done + (f.size * pct) / 100) / total) * 100));
+    done += f.size;
+    media.push({ url: blob.url, kind: isVideo(f) ? 'video' : 'image', fileName: f.name });
+  }
+  const body = Object.fromEntries([...data.entries()].filter(([k]) => k !== 'media' && k !== 'video'));
+  body.media = media;
+  return postUpload(body);
+}
+
+async function sendViaBlob(file, data, onProgress) {
+  const blob = await uploadToBlob(file, onProgress);
+  const body = Object.fromEntries([...data.entries()].filter(([k]) => k !== 'video'));
+  body.blobUrl = blob.url;
+  body.fileName = file.name;
+  return postUpload(body);
+}
+
 $('#form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
-  const platforms = $$('input[name=platforms]:checked').map((i) => i.value);
-  if (!platforms.length) return alert('ഒരു platform എങ്കിലും തിരഞ്ഞെടുക്കൂ');
-  const file = input.files[0];
-  if (!file) {
+  const chosen = pickedChannels();
+  if (!chosen.length) return toast(channels.length ? 'ഒരു channel എങ്കിലും തിരഞ്ഞെടുക്കൂ' : 'ആദ്യം Channels-ൽ ഒരു channel ചേർക്കൂ', true);
+  const platforms = chosen.map((c) => c.platform);
+  if (!picked.length) {
     drop.classList.add('over');
     setTimeout(() => drop.classList.remove('over'), 600);
     return;
   }
-  if (status.maxVideoBytes && file.size > status.maxVideoBytes) {
-    return alert(`Video 300 MB-യിൽ കൂടുതലാണ് (${mb(file.size)}). ചെറുതാക്കി വീണ്ടും ശ്രമിക്കൂ.`);
+  const photos = photoMode();
+  const file = picked[0];
+  const totalSize = picked.reduce((n, f) => n + f.size, 0);
+  if (status.maxVideoBytes && totalSize > status.maxVideoBytes) {
+    return toast(`300 MB-യിൽ കൂടുതലാണ് (${mb(totalSize)}). ചെറുതാക്കി വീണ്ടും ശ്രമിക്കൂ.`, true);
+  }
+  if (photos && platforms.includes('facebook') && picked.length > 1 && picked.some(isVideo)) {
+    return toast('Facebook multi-photo post-ൽ video പറ്റില്ല. FB Page untick ചെയ്യൂ.', true);
   }
 
   const mode = currentMode();
@@ -419,18 +670,24 @@ $('#form').addEventListener('submit', async (e) => {
   }
 
   const data = new FormData(form);
-  data.delete('platforms');
-  data.set('platforms', platforms.join(','));
+  data.delete('channels');
+  data.set('channels', chosen.map((c) => c.id).join(','));
   data.set('mode', mode);
   if (scheduledAt) data.set('scheduledAt', scheduledAt);
+  if (photos) data.set('type', picked.length > 1 ? 'carousel' : 'photo');
+  else data.set('video', file);
 
   const submit = $('#submit');
   submit.disabled = true;
-  overlay.open(platforms);
+  overlay.open(chosen);
   const onProgress = (pct) =>
-    overlay.progress(pct, 'Uploading…', `${mb((file.size * pct) / 100)} / ${mb(file.size)}`);
+    overlay.progress(pct, 'Uploading…', `${mb((totalSize * pct) / 100)} / ${mb(totalSize)}`);
   try {
-    const result = status.blobUploads ? await sendViaBlob(file, data, onProgress) : await sendDirect(data, onProgress);
+    const result = photos
+      ? await sendMedia(picked, data, onProgress)
+      : status.blobUploads
+        ? await sendViaBlob(file, data, onProgress)
+        : await sendDirect(data, onProgress);
     resetForm(form);
     if (mode === 'now') overlay.launch(result.jobId);
     else overlay.saved(result);
@@ -552,11 +809,11 @@ function rowLinks(j, p, s) {
       : '';
   const del =
     s.state === 'done' && !s.deleted
-      ? `<button class="icon-btn del" data-del="${esc(j.id)}" data-platform="${p}" title="Delete from ${NAMES[p]}">${UI_ICONS.trash}</button>`
+      ? `<button class="icon-btn del" data-del="${esc(j.id)}" data-platform="${esc(p)}" title="Delete from ${esc(s.channelName || NAMES[s.platform || p])}">${UI_ICONS.trash}</button>`
       : '';
   const retry =
     s.state === 'error' && j.canRetry
-      ? `<button class="btn small retry" data-retry="${esc(j.id)}" data-platform="${p}">${UI_ICONS.retry} Retry</button>`
+      ? `<button class="btn small retry" data-retry="${esc(j.id)}" data-platform="${esc(p)}">${UI_ICONS.retry} Retry</button>`
       : '';
   return `<span class="links">${retry}${open}${del}</span>`;
 }
@@ -569,7 +826,7 @@ function renderAll(jobs) {
         : `<button class="icon-btn" data-remove="${esc(j.id)}" title="List-ൽ നിന്ന് മാറ്റുക">${UI_ICONS.remove}</button>`;
       return `<div class="job" data-job="${esc(j.id)}">
         <div class="job-head">
-          <b>${esc(titleOf(j))} <span class="muted">· ${j.type === 'reel' ? 'Reel' : 'Video'}</span></b>
+          <b>${esc(titleOf(j))} <span class="muted">· ${typeLabel(j)}</span></b>
           <span class="menu"><time title="${esc(new Date(j.createdAt).toLocaleString())}">${timeAgo(j.createdAt)}</time>${removeBtn}</span>
         </div>
         ${Object.entries(j.platforms || {})
@@ -578,8 +835,8 @@ function renderAll(jobs) {
             const mark = active ? '<span class="spin"></span> ' : s.deleted ? '' : s.state === 'done' ? '✓ ' : '✕ ';
             const msg = s.deleted ? '<span class="tag deleted">Deleted</span>' : esc(s.message);
             return `<div class="prow ${s.deleted ? 'deleted' : ''}">
-              <span class="pi ${PI_CLASS[p]}">${ICONS[p]}</span>
-              <span class="msg ${s.state}">${mark}${msg}</span>
+              ${targetAvatar(p, s)}
+              <span class="msg ${s.state}"><b class="chn">${esc(s.channelName || NAMES[s.platform || p] || '')}</b> ${mark}${msg}</span>
               ${rowLinks(j, p, s)}
               ${active ? `<span class="bar ${s.progress ? '' : 'indef'}"><i style="width:${s.progress || 0}%"></i></span>` : ''}
             </div>`;
@@ -592,29 +849,36 @@ function renderAll(jobs) {
 
 function renderPlatform(posts, p) {
   return posts
-    .map(({ j, s }) => {
+    .map(({ j, s, key }) => {
       const sub = s.deleted
         ? '<span class="tag deleted">Deleted</span>'
-        : `${timeAgo(j.createdAt)} · ${j.type === 'reel' ? 'Reel' : 'Video'}${s.account ? ` · @${esc(s.account)}` : ''}`;
+        : `${timeAgo(j.createdAt)} · ${typeLabel(j)} · ${esc(s.channelName || '')}`;
       return `<div class="post ${s.deleted ? 'deleted' : ''}">
-        <span class="pi ${PI_CLASS[p]}">${ICONS[p]}</span>
+        ${targetAvatar(key, s)}
         <span class="txt"><b>${esc(titleOf(j))}</b><small>${sub}</small></span>
-        ${rowLinks(j, p, s)}
+        ${rowLinks(j, key, s)}
       </div>`;
     })
     .join('');
 }
+
+// A post target's platform (old single-user posts used the platform name as the key).
+const platformOf = (key, t) => t?.platform || key;
+const targetAvatar = (key, t) => avatar({ ...t, id: key, platform: platformOf(key, t), avatar: t.avatar || chanById(key)?.avatar }, 'sm');
+// All targets of the posts on one platform, as rows.
+const targetsOn = (jobs, platform) =>
+  jobs.flatMap((j) => Object.entries(j.platforms || {}).filter(([k, t]) => platformOf(k, t) === platform).map(([key, s]) => ({ j, s, key })));
 
 function render() {
   renderPlanner();
   // The Posted page only shows uploads that went out (or are going out now).
   const postedJobs = allJobs.filter((j) => j.status === 'posted' || j.status === 'posting');
   // Tab counts: posts that are live on each platform.
-  const live = (p) => postedJobs.filter((j) => j.platforms?.[p]?.state === 'done' && !j.platforms[p].deleted).length;
+  const live = (p) => targetsOn(postedJobs, p).filter(({ s }) => s.state === 'done' && !s.deleted).length;
   $$('[data-count]').forEach((el) => {
     el.textContent = el.dataset.count === 'all' ? postedJobs.length : live(el.dataset.count);
   });
-  const hasFb = postedJobs.some((j) => j.platforms?.facebook);
+  const hasFb = targetsOn(postedJobs, 'facebook').length > 0;
   $('.tab[data-tab="facebook"]').hidden = !hasFb;
   if (!hasFb && currentTab === 'facebook') currentTab = 'all';
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === currentTab));
@@ -625,9 +889,7 @@ function render() {
     total = postedJobs.length;
     html = renderAll(postedJobs.slice(0, shown));
   } else {
-    const posts = postedJobs
-      .filter((j) => j.platforms?.[currentTab]?.state === 'done')
-      .map((j) => ({ j, s: j.platforms[currentTab] }));
+    const posts = targetsOn(postedJobs, currentTab).filter(({ s }) => s.state === 'done');
     total = posts.length;
     html = renderPlatform(posts.slice(0, shown), currentTab);
   }
@@ -668,13 +930,15 @@ document.addEventListener('visibilitychange', () => document.visibilityState ===
 // ---------- delete a post / take an upload off the list ----------
 async function deletePost(btn) {
   const id = btn.dataset.del;
-  const p = btn.dataset.platform;
+  const p = btn.dataset.platform; // the target key (channel id)
   const job = allJobs.find((j) => j.id === id);
-  const extra = p === 'instagram' ? ' Facebook profile-ലേക്ക് auto-share ആയ copy Facebook-ൽ നിന്ന് വേറെ delete ചെയ്യണം.' : '';
+  const t = job?.platforms?.[p] || {};
+  const where = t.channelName || NAMES[platformOf(p, t)];
+  const extra = platformOf(p, t) === 'instagram' ? ' Facebook profile-ലേക്ക് auto-share ആയ copy Facebook-ൽ നിന്ന് വേറെ delete ചെയ്യണം.' : '';
   const ok = await askConfirm({
-    icon: `<span class="pi ${PI_CLASS[p]}">${ICONS[p]}</span>`,
-    title: `${NAMES[p]}-ൽ നിന്ന് delete ചെയ്യണോ?`,
-    text: `"${titleOf(job)}" ${NAMES[p]}-ൽ നിന്ന് ഒഴിവാക്കും. ഇത് തിരിച്ചെടുക്കാൻ പറ്റില്ല.${extra}`,
+    icon: targetAvatar(p, t),
+    title: `${where}-ൽ നിന്ന് delete ചെയ്യണോ?`,
+    text: `"${titleOf(job)}" ${where}-ൽ നിന്ന് ഒഴിവാക്കും. ഇത് തിരിച്ചെടുക്കാൻ പറ്റില്ല.${extra}`,
   });
   if (!ok) return;
   btn.disabled = true;
@@ -690,7 +954,7 @@ async function deletePost(btn) {
     const i = allJobs.findIndex((j) => j.id === id);
     if (i >= 0) allJobs[i] = json;
     render();
-    toast(`${NAMES[p]}-ൽ നിന്ന് delete ചെയ്തു ✓`);
+    toast(`${where}-ൽ നിന്ന് delete ചെയ്തു ✓`);
   } catch (err) {
     btn.disabled = false;
     btn.innerHTML = UI_ICONS.trash;
@@ -734,7 +998,7 @@ async function retryPost(btn) {
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(json.error || 'Retry failed');
-    toast(`${NAMES[p]} വീണ്ടും ശ്രമിക്കുന്നു…`);
+    toast(`${allJobs.find((j) => j.id === id)?.platforms?.[p]?.channelName || 'Channel'} വീണ്ടും ശ്രമിക്കുന്നു…`);
     loadJobs();
   } catch (err) {
     btn.disabled = false;
@@ -770,9 +1034,11 @@ function dayLabel(d) {
   return d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
 }
 const platIcons = (j) =>
-  Object.keys(j.platforms || {})
-    .map((p) => `<span class="pi ${PI_CLASS[p]} mini" title="${NAMES[p]}">${ICONS[p]}</span>`)
+  Object.entries(j.platforms || {})
+    .map(([k, t]) => targetAvatar(k, t))
     .join('');
+// A post's targets as channel-like objects (for the upload animation).
+const targetList = (j) => Object.entries(j.platforms || {}).map(([k, t]) => ({ ...t, id: k, platform: platformOf(k, t), name: t.channelName }));
 function outcome(j) {
   if (j.status !== 'posted') return j.status;
   const states = Object.values(j.platforms || {});
@@ -792,7 +1058,7 @@ function plannedItem(j, { showDay = false } = {}) {
     <div class="time">${time}</div>
     <div class="body">
       <b>${esc(titleOf(j))}</b>
-      <div class="plats">${platIcons(j)}<span class="st ${j.status}">${ST_LABEL[j.status]}</span><small class="muted">${j.type === 'reel' ? 'Reel' : 'Video'}</small></div>
+      <div class="plats">${platIcons(j)}<span class="st ${j.status}">${ST_LABEL[j.status]}</span><small class="muted">${typeLabel(j)}</small></div>
     </div>
     <div class="acts">
       <button class="btn small" data-act="now" data-id="${esc(j.id)}">⚡ Post now</button>
@@ -851,7 +1117,7 @@ document.addEventListener('click', async (e) => {
     const ok = await askConfirm({
       icon: '<div style="font-size:34px">⚡</div>',
       title: 'ഇപ്പോൾ തന്നെ post ചെയ്യണോ?',
-      text: `"${titleOf(job)}" ഇപ്പോൾ ${Object.keys(job.platforms).map((p) => NAMES[p]).join(', ')}-ൽ post ആവും.`,
+      text: `"${titleOf(job)}" ഇപ്പോൾ ${targetList(job).map((t) => t.name || NAMES[t.platform]).join(', ')}-ൽ post ആവും.`,
       yes: 'Post now',
     });
     if (!ok) return;
@@ -859,7 +1125,7 @@ document.addEventListener('click', async (e) => {
       const res = await apiFetch(`/api/jobs/${encodeURIComponent(job.id)}/publish`, { method: 'POST' });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || 'Could not post');
-      overlay.open(Object.keys(job.platforms));
+      overlay.open(targetList(job));
       overlay.launch(json.jobId);
       loadJobs();
     } catch (err) {
@@ -888,7 +1154,16 @@ let editing = null;
 function openEditor(job) {
   editing = job;
   $('#editTitle').textContent = job.status === 'draft' ? 'Edit draft' : 'Edit scheduled post';
-  $$('#editPlatforms input').forEach((i) => (i.checked = Boolean(job.platforms?.[i.value])));
+  const photo = job.type === 'photo' || job.type === 'carousel';
+  $('#editPlatforms').innerHTML = channels.length
+    ? channels
+        .map(
+          (c) => `<label class="chpick" title="${esc(channelLabel(c))}">
+            <input type="checkbox" value="${esc(c.id)}" ${job.platforms?.[c.id] ? 'checked' : ''} ${photo && c.platform === 'youtube' ? 'disabled' : ''} />
+            ${avatar(c)}<span class="tick">✓</span><small>${esc(channelLabel(c))}</small></label>`,
+        )
+        .join('')
+    : '<div class="picker-empty">Channels ഇല്ല</div>';
   $('#editCaption').value = job.caption || '';
   $('#editYtTitle').value = job.settings?.ytTitle || '';
   const mode = job.status === 'scheduled' ? 'schedule' : 'draft';
@@ -906,11 +1181,11 @@ $('#editor').addEventListener('click', (e) => e.target.id === 'editor' && ($('#e
 $('#editForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!editing) return;
-  const platforms = $$('#editPlatforms input:checked').map((i) => i.value);
-  if (!platforms.length) return toast('ഒരു platform എങ്കിലും തിരഞ്ഞെടുക്കൂ', true);
+  const picked = $$('#editPlatforms input:checked:not(:disabled)').map((i) => i.value);
+  if (!picked.length) return toast('ഒരു channel എങ്കിലും തിരഞ്ഞെടുക്കൂ', true);
   const mode = document.querySelector('input[name=editMode]:checked').value;
   const body = {
-    platforms: platforms.join(','),
+    channels: picked.join(','),
     caption: $('#editCaption').value,
     ytTitle: $('#editYtTitle').value,
     mode,
@@ -989,11 +1264,11 @@ function renderCalendar() {
           .map(({ j, kind }) =>
             j.status === 'scheduled'
               ? plannedItem(j)
-              : `<div class="post"><span class="pi ${PI_CLASS[Object.keys(j.platforms)[0]] || 'yt'}">${ICONS[Object.keys(j.platforms)[0]] || ''}</span>
+              : `<div class="post"><span class="plats">${platIcons(j)}</span>
                   <span class="txt"><b>${esc(titleOf(j))}</b><small>${fmtTime(j.postedAt || j.createdAt)} · <span class="st ${kind}">${ST_LABEL[kind]}</span></small></span>
                   <span class="links">${Object.entries(j.platforms)
                     .filter(([, s]) => s.url && !s.deleted)
-                    .map(([p, s]) => `<a class="icon-btn" href="${esc(s.url)}" target="_blank" rel="noopener" title="Open on ${NAMES[p]}">${ICONS[p]}</a>`)
+                    .map(([p, s]) => `<a class="icon-btn" href="${esc(s.url)}" target="_blank" rel="noopener" title="Open on ${esc(s.channelName || NAMES[platformOf(p, s)])}">${UI_ICONS.open}</a>`)
                     .join('')}</span></div>`,
           )
           .join('')
@@ -1103,19 +1378,17 @@ async function loadAnalytics(refresh = false) {
   notes.push(...data.errors);
   $('#statsNote').textContent = notes.join(' · ');
 
-  const maxViews = Math.max(1, ...data.rows.map((r) => Math.max(r.youtube?.views || 0, r.instagram?.views || 0)));
-  const line = (p, s) =>
-    s
-      ? `<div class="sline"><span class="pi ${PI_CLASS[p]}">${ICONS[p]}</span>
+  const maxViews = Math.max(1, ...data.rows.flatMap((r) => r.lines.map((l) => l.views || 0)));
+  const line = (s) => `<div class="sline">${avatar({ platform: s.platform, name: s.channelName, avatar: chanById(s.channelId)?.avatar }, 'sm')}
+          <span class="muted">${esc(s.channelName || '')}</span>
           ${s.error ? `<span>${esc(s.error === 'deleted' ? 'Deleted' : s.error)}</span>` : `
           <span><b>${num(s.views)}</b> views</span><span><b>${num(s.likes)}</b> ♥</span><span><b>${num(s.comments)}</b> 💬</span>
           <span class="bar-h"><i style="width:${Math.round(((s.views || 0) / maxViews) * 100)}%"></i></span>`}
           ${s.url ? `<a class="icon-btn" href="${esc(s.url)}" target="_blank" rel="noopener" title="Open">${UI_ICONS.open}</a>` : ''}
-        </div>`
-      : '';
+        </div>`;
   $('#statRows').innerHTML = data.rows.length
     ? data.rows
-        .map((r) => `<div class="srow"><div class="h"><b>${esc(r.title)}</b><small>${timeAgo(r.createdAt)}</small></div>${line('youtube', r.youtube)}${line('instagram', r.instagram)}</div>`)
+        .map((r) => `<div class="srow"><div class="h"><b>${esc(r.title)}</b><small>${timeAgo(r.createdAt)}</small></div>${r.lines.map(line).join('')}</div>`)
         .join('')
     : '<div class="empty"><span class="big">📊</span>Post ചെയ്തതിന് ശേഷം ഇവിടെ views, likes കാണാം</div>';
 }
@@ -1135,11 +1408,13 @@ $('#copyCron').addEventListener('click', async () => {
 });
 
 // ---------- navigation ----------
-const VIEW_NAMES = ['create', 'queue', 'calendar', 'posted', 'ideas', 'analytics'];
+const VIEW_NAMES = ['create', 'queue', 'calendar', 'posted', 'ideas', 'analytics', 'channels'];
 function showView(name) {
   if (!VIEW_NAMES.includes(name)) name = 'create';
   $$('.view').forEach((v) => (v.hidden = v.dataset.view !== name));
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === name));
+  if (['queue', 'calendar', 'posted'].includes(name)) loadJobs();
+  if (name === 'channels') loadStatus().catch(() => {});
   if (name === 'calendar') renderCalendar();
   if (name === 'ideas') loadIdeas();
   if (name === 'analytics') loadAnalytics();
@@ -1149,6 +1424,12 @@ function showView(name) {
 window.addEventListener('hashchange', () => showView(location.hash.slice(1)));
 showView(location.hash.slice(1));
 
-loadStatus().catch(() => {});
+loadStatus()
+  .then(() => pendingPick && openPicker(pendingPick))
+  .catch(() => {});
 loadJobs();
 
+
+function typeLabel(j) {
+  return { reel: 'Reel', video: 'Video', photo: 'Photo', carousel: 'Carousel' }[j.type] || 'Video';
+}

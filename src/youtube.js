@@ -1,7 +1,9 @@
+// YouTube: connecting channels, uploading, deleting and stats. Every function works on one
+// connected channel (its tokens live in channel.secret.tokens).
 import fs from 'node:fs';
 import { google } from 'googleapis';
 import { config } from './config.js';
-import { getAccounts, updateAccounts } from './store.js';
+import { updateChannelSecret } from './db.js';
 
 const DELETE_SCOPE = 'https://www.googleapis.com/auth/youtube.force-ssl';
 const SCOPES = [
@@ -11,41 +13,44 @@ const SCOPES = [
   DELETE_SCOPE,
 ];
 
-export function youtubeCanDelete(account) {
-  const granted = String(account?.tokens?.scope || '');
-  return granted.includes(DELETE_SCOPE) || /auth\/youtube(\s|$)/.test(granted);
-}
-
 export function youtubeConfigured() {
   return Boolean(config.google.clientId && config.google.clientSecret);
 }
 
-function makeClient() {
-  const client = new google.auth.OAuth2(
-    config.google.clientId,
-    config.google.clientSecret,
-    config.google.redirectUri,
-  );
-  // Google sends a fresh access token from time to time: keep it.
+export function youtubeCanDelete(channel) {
+  const granted = String(channel?.secret?.tokens?.scope || '');
+  return granted.includes(DELETE_SCOPE) || /auth\/youtube(\s|$)/.test(granted);
+}
+
+function newClient() {
+  return new google.auth.OAuth2(config.google.clientId, config.google.clientSecret, config.google.redirectUri);
+}
+
+// A YouTube API client for one channel. Refreshed access tokens are saved back to the channel.
+function apiFor(channel) {
+  const client = newClient();
+  client.setCredentials(channel.secret?.tokens || {});
   client.on('tokens', (tokens) => {
-    updateAccounts((all) =>
-      all.youtube ? { youtube: { ...all.youtube, tokens: { ...all.youtube.tokens, ...tokens } } } : {},
-    ).catch((err) => console.error('Could not save refreshed YouTube token', err));
+    const merged = { ...(channel.secret?.tokens || {}), ...tokens };
+    channel.secret = { ...(channel.secret || {}), tokens: merged };
+    updateChannelSecret(channel.id, channel.secret).catch((err) => console.error('Could not save refreshed YouTube token', err));
   });
-  return client;
+  return google.youtube({ version: 'v3', auth: client });
 }
 
 export function youtubeAuthUrl(state) {
-  return makeClient().generateAuthUrl({
+  return newClient().generateAuthUrl({
     access_type: 'offline',
-    prompt: 'consent',
+    // select_account lets people pick a different Google account / brand channel each time.
+    prompt: 'consent select_account',
     scope: SCOPES,
     state,
   });
 }
 
-export async function youtubeHandleCallback(code) {
-  const client = makeClient();
+// Google login -> the channel that account chose, plus its tokens.
+export async function youtubeExchangeCode(code) {
+  const client = newClient();
   const { tokens } = await client.getToken(code);
   if (!tokens.refresh_token) {
     throw new Error('Google did not return a refresh token. Remove the app at myaccount.google.com/permissions and connect again.');
@@ -53,26 +58,21 @@ export async function youtubeHandleCallback(code) {
   client.setCredentials(tokens);
   const yt = google.youtube({ version: 'v3', auth: client });
   const me = await yt.channels.list({ part: ['snippet'], mine: true });
-  const channel = me.data.items?.[0];
-  if (!channel) throw new Error('This Google account has no YouTube channel.');
-  await updateAccounts({
-    youtube: {
-      tokens,
-      channelId: channel.id,
-      channelTitle: channel.snippet.title,
-      connectedAt: new Date().toISOString(),
+  const ch = me.data.items?.[0];
+  if (!ch) throw new Error('This Google account has no YouTube channel.');
+  return {
+    tokens,
+    channel: {
+      id: ch.id,
+      title: ch.snippet.title,
+      handle: ch.snippet.customUrl || null,
+      avatar: ch.snippet.thumbnails?.default?.url || null,
     },
-  });
+  };
 }
 
-export async function uploadToYouTube({ filePath, title, description, tags, privacy, isShort }, onProgress) {
-  const account = (await getAccounts()).youtube;
-  if (!account) throw new Error('YouTube is not connected');
-
-  const client = makeClient();
-  client.setCredentials(account.tokens);
-  const yt = google.youtube({ version: 'v3', auth: client });
-
+export async function uploadToYouTube(channel, { filePath, title, description, tags, privacy, isShort }, onProgress) {
+  const yt = apiFor(channel);
   let finalTitle = (title || 'New video').trim();
   let finalDescription = description || '';
   if (isShort && !/#shorts/i.test(finalTitle + finalDescription)) {
@@ -92,10 +92,7 @@ export async function uploadToYouTube({ filePath, title, description, tags, priv
           tags: tags?.length ? tags : undefined,
           categoryId: '22',
         },
-        status: {
-          privacyStatus: privacy || 'public',
-          selfDeclaredMadeForKids: false,
-        },
+        status: { privacyStatus: privacy || 'public', selfDeclaredMadeForKids: false },
       },
       media: { body: fs.createReadStream(filePath) },
     },
@@ -116,22 +113,34 @@ export function youtubeIdFromUrl(url) {
   return m ? m[1] : null;
 }
 
-export async function deleteYouTubeVideo(videoId) {
-  const account = (await getAccounts()).youtube;
-  if (!account) throw new Error('YouTube is not connected');
-  if (!youtubeCanDelete(account)) {
-    throw new Error('YouTube-ൽ delete ചെയ്യാൻ permission ഇല്ല. YouTube "Reconnect" ചെയ്ത് വീണ്ടും ശ്രമിക്കൂ.');
+export async function deleteYouTubeVideo(channel, videoId) {
+  if (!youtubeCanDelete(channel)) {
+    throw new Error('YouTube-ൽ delete ചെയ്യാൻ permission ഇല്ല. Channels-ൽ ഈ YouTube "Reconnect" ചെയ്ത് വീണ്ടും ശ്രമിക്കൂ.');
   }
-  const client = makeClient();
-  client.setCredentials(account.tokens);
-  const yt = google.youtube({ version: 'v3', auth: client });
   try {
-    await yt.videos.delete({ id: videoId });
+    await apiFor(channel).videos.delete({ id: videoId });
   } catch (err) {
     const code = err?.code || err?.response?.status;
     if (code === 404) return { alreadyGone: true }; // already deleted on YouTube
-    if (code === 403) throw new Error('YouTube refused: reconnect YouTube and try again.');
+    if (code === 403) throw new Error('YouTube refused: reconnect this channel and try again.');
     throw err;
   }
   return { alreadyGone: false };
+}
+
+// Views / likes / comments for up to 50 videos per call.
+export async function youtubeStats(channel, ids) {
+  const out = {};
+  const yt = apiFor(channel);
+  for (let i = 0; i < ids.length; i += 50) {
+    const res = await yt.videos.list({ part: ['statistics'], id: ids.slice(i, i + 50) });
+    for (const v of res.data.items || []) {
+      out[v.id] = {
+        views: Number(v.statistics?.viewCount || 0),
+        likes: Number(v.statistics?.likeCount || 0),
+        comments: Number(v.statistics?.commentCount || 0),
+      };
+    }
+  }
+  return out;
 }

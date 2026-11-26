@@ -24,10 +24,14 @@
         <p>ഒരു തവണ അപ്‌ലോഡ് ചെയ്യൂ, എല്ലായിടത്തും പോസ്റ്റ് ആവും</p>
       </div>
     </div>
-    <button class="btn small ghost" id="logout" title="Logout">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 17l5-5-5-5M20 12H9M12 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7"/></svg>
-      Logout
-    </button>
+    <div class="me">
+      <span class="avatar-me" id="meAvatar">?</span>
+      <span class="me-name" id="meName"></span>
+      <button class="btn small ghost" id="logout" title="Logout">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 17l5-5-5-5M20 12H9M12 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7"/></svg>
+        Logout
+      </button>
+    </div>
   </header>
 
   <nav class="nav" id="nav" aria-label="Sections">
@@ -49,6 +53,9 @@
     <a href="#analytics" data-view="analytics">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Analytics
     </a>
+    <a href="#channels" data-view="channels">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M8.6 10.7l6.8-3.4M8.6 13.3l6.8 3.4"/></svg>Channels<span class="badge-count" id="channelCount" hidden>0</span>
+    </a>
   </nav>
 
   <div class="banner-wrap"><div id="banner" class="banner" hidden></div></div>
@@ -59,14 +66,15 @@
         <div class="card-title"><h2>New post</h2><span class="ml">പുതിയ പോസ്റ്റ്</span></div>
         <form id="form">
           <label class="drop" id="drop">
-            <input type="file" name="video" id="video" accept="video/*" />
+            <input type="file" id="video" accept="video/*,image/*" multiple />
             <div id="dropEmpty">
               <div class="cloud" style="margin:0 auto 10px">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M20 16.5V19a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2.5"/></svg>
               </div>
-              <strong>Video തിരഞ്ഞെടുക്കൂ</strong><br />
-              <small>Tap ചെയ്യൂ അല്ലെങ്കിൽ drag ചെയ്യൂ · max 300 MB</small>
+              <strong>Video അല്ലെങ്കിൽ photos തിരഞ്ഞെടുക്കൂ</strong><br />
+              <small>1 video · അല്ലെങ്കിൽ 1–10 photos (carousel) · max 300 MB</small>
             </div>
+            <div class="media-grid" id="mediaGrid" hidden></div>
             <div class="file-row" id="dropFile" hidden>
               <video id="preview" muted playsinline loop></video>
               <div class="meta">
@@ -79,31 +87,16 @@
 
           <div class="group">
             <span class="label">Type</span>
-            <div class="segmented">
+            <div class="segmented three">
               <label><input type="radio" name="type" value="reel" checked /><span>Reel / Short<small>vertical · ≤ 90s</small></span></label>
-              <label><input type="radio" name="type" value="video" /><span>Long video<small>horizontal / long</small></span></label>
+              <label><input type="radio" name="type" value="video" /><span>Long video<small>horizontal</small></span></label>
+              <label><input type="radio" name="type" value="photo" /><span>Photo<small>1–10 = carousel</small></span></label>
             </div>
           </div>
 
           <div class="group">
-            <span class="label">Post to</span>
-            <div class="platforms">
-              <label class="ptile">
-                <input type="checkbox" name="platforms" value="youtube" checked />
-                <span class="inner"><span class="pi yt" data-icon="youtube"></span>YouTube<small>Shorts / video</small></span>
-                <span class="check"><svg viewBox="0 0 24 24" fill="none" stroke="#06281c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg></span>
-              </label>
-              <label class="ptile">
-                <input type="checkbox" name="platforms" value="instagram" checked />
-                <span class="inner"><span class="pi ig" data-icon="instagram"></span>Instagram<small>Reel → FB profile</small></span>
-                <span class="check"><svg viewBox="0 0 24 24" fill="none" stroke="#06281c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg></span>
-              </label>
-              <label class="ptile" title="Facebook Page-ലേക്ക് മാത്രം. Profile-ലേക്ക് Instagram auto-share വഴി പോവും.">
-                <input type="checkbox" name="platforms" value="facebook" />
-                <span class="inner"><span class="pi fb" data-icon="facebook"></span>FB Page<small>optional</small></span>
-                <span class="check"><svg viewBox="0 0 24 24" fill="none" stroke="#06281c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg></span>
-              </label>
-            </div>
+            <span class="label">Post to <small class="muted" id="pickedCount"></small></span>
+            <div class="channel-picker" id="channelPicker"><div class="skeleton"></div></div>
           </div>
 
           <div class="group">
@@ -152,17 +145,8 @@
 
     <div class="col">
       <section class="card">
-        <div class="card-title"><h2>Accounts</h2><span class="ml">അക്കൗണ്ടുകൾ</span></div>
-        <div class="accounts">
-          <div class="account" id="acc-youtube">
-            <span class="pi yt" data-icon="youtube"></span>
-            <div class="who"><div class="skeleton" style="width:60%"></div></div>
-          </div>
-          <div class="account" id="acc-meta">
-            <span class="pi ig" data-icon="instagram"></span>
-            <div class="who"><div class="skeleton" style="width:70%"></div></div>
-          </div>
-        </div>
+        <div class="card-title"><h2>Channels</h2><a class="btn small ghost" href="#channels">Manage →</a></div>
+        <div class="channel-mini" id="channelMini"><div class="skeleton"></div></div>
       </section>
 
       <section class="card">
@@ -237,6 +221,44 @@
     </section>
   </main>
 
+  <!-- CHANNELS -->
+  <main class="page view" data-view="channels" hidden>
+    <section class="card">
+      <div class="card-title"><h2>Connect a channel</h2><span class="ml">പുതിയ channel ചേർക്കൂ</span></div>
+      <div class="connect-row">
+        <a class="connect-tile" href="/auth/google">
+          <span class="pi yt" data-icon="youtube"></span>
+          <b>YouTube channel</b><small>Google login · ഓരോ channel-ഉം വേറെ ചേർക്കാം</small>
+        </a>
+        <a class="connect-tile" href="/auth/facebook">
+          <span class="pi ig" data-icon="instagram"></span>
+          <b>Instagram account</b><small>Business/Creator · Facebook login വഴി</small>
+        </a>
+        <a class="connect-tile" href="/auth/facebook">
+          <span class="pi fb" data-icon="facebook"></span>
+          <b>Facebook Page</b><small>Facebook login</small>
+        </a>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-title"><h2>Your channels</h2><span class="ml">ചേർത്ത channels</span></div>
+      <div id="channelList" class="channel-list"></div>
+    </section>
+  </main>
+
+  <!-- choose which Instagram accounts / Pages to add after a Facebook login -->
+  <div class="overlay" id="picker" hidden>
+    <form class="stage edit-box" id="pickerForm" role="dialog" aria-modal="true" aria-labelledby="pickerTitle">
+      <h3 id="pickerTitle">ഏതൊക്കെ ചേർക്കണം?</h3>
+      <p class="muted" style="text-align:center;margin:-8px 0 16px">Facebook login-ൽ നിന്ന് കിട്ടിയ accounts. വേണ്ടത് tick ചെയ്യൂ.</p>
+      <div id="pickerList" class="picker-list"></div>
+      <div class="actions">
+        <button type="button" class="btn" id="pickerCancel">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;padding:12px 26px">Add channels</button>
+      </div>
+    </form>
+  </div>
+
   <!-- POSTED -->
   <main class="page view" data-view="posted" hidden>
       <section class="card" id="uploads">
@@ -258,11 +280,7 @@
       <h3 id="editTitle">Edit post</h3>
       <div class="group">
         <span class="label">Post to</span>
-        <div class="chk-row" id="editPlatforms">
-          <label><input type="checkbox" value="youtube" /> <span class="pi yt mini" data-icon="youtube"></span> YouTube</label>
-          <label><input type="checkbox" value="instagram" /> <span class="pi ig mini" data-icon="instagram"></span> Instagram</label>
-          <label><input type="checkbox" value="facebook" /> <span class="pi fb mini" data-icon="facebook"></span> FB Page</label>
-        </div>
+        <div class="chk-row" id="editPlatforms"></div>
       </div>
       <div class="group">
         <span class="label">Caption</span>
