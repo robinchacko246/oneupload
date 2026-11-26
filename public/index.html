@@ -131,9 +131,16 @@
         </div>
       </section>
 
-      <section class="card">
-        <div class="card-title"><h2>Recent uploads</h2><span class="ml">മുൻ അപ്‌ലോഡുകൾ</span></div>
+      <section class="card" id="uploads">
+        <div class="card-title"><h2>Uploads</h2><span class="ml">അപ്‌ലോഡ് ചെയ്തവ</span></div>
+        <div class="tabs" id="tabs" role="tablist">
+          <button class="tab active" data-tab="all" role="tab">All <span class="count" data-count="all">0</span></button>
+          <button class="tab" data-tab="youtube" role="tab"><span class="pi yt mini" data-icon="youtube"></span>YouTube <span class="count" data-count="youtube">0</span></button>
+          <button class="tab" data-tab="instagram" role="tab"><span class="pi ig mini" data-icon="instagram"></span>Instagram <span class="count" data-count="instagram">0</span></button>
+          <button class="tab" data-tab="facebook" role="tab" hidden><span class="pi fb mini" data-icon="facebook"></span>Facebook <span class="count" data-count="facebook">0</span></button>
+        </div>
         <div id="jobs" class="jobs"><div class="skeleton"></div></div>
+        <button class="btn small ghost more-btn" id="more" hidden>Show more</button>
       </section>
     </div>
   </main>
@@ -165,6 +172,21 @@
       </div>
     </div>
   </div>
+
+  <!-- confirm dialog -->
+  <div class="overlay" id="confirm" hidden>
+    <div class="stage confirm-box" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <div class="confirm-icon" id="confirmIcon"></div>
+      <h3 id="confirmTitle">Delete?</h3>
+      <p id="confirmText"></p>
+      <div class="actions">
+        <button class="btn" id="confirmNo">Cancel</button>
+        <button class="btn danger" id="confirmYes">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
 
   <script src="/app.js" type="module"></script>
 </body>

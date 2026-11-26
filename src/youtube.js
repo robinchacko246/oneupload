@@ -3,10 +3,18 @@ import { google } from 'googleapis';
 import { config } from './config.js';
 import { getAccounts, updateAccounts } from './store.js';
 
+const DELETE_SCOPE = 'https://www.googleapis.com/auth/youtube.force-ssl';
 const SCOPES = [
   'https://www.googleapis.com/auth/youtube.upload',
   'https://www.googleapis.com/auth/youtube.readonly',
+  // Needed to delete videos from the app.
+  DELETE_SCOPE,
 ];
+
+export function youtubeCanDelete(account) {
+  const granted = String(account?.tokens?.scope || '');
+  return granted.includes(DELETE_SCOPE) || /auth\/youtube(\s|$)/.test(granted);
+}
 
 export function youtubeConfigured() {
   return Boolean(config.google.clientId && config.google.clientSecret);
@@ -101,4 +109,29 @@ export async function uploadToYouTube({ filePath, title, description, tags, priv
   const id = res.data.id;
   const url = isShort ? `https://youtube.com/shorts/${id}` : `https://youtu.be/${id}`;
   return { id, url, privacy: res.data.status?.privacyStatus };
+}
+
+export function youtubeIdFromUrl(url) {
+  const m = String(url || '').match(/(?:shorts\/|youtu\.be\/|[?&]v=)([\w-]{6,})/);
+  return m ? m[1] : null;
+}
+
+export async function deleteYouTubeVideo(videoId) {
+  const account = (await getAccounts()).youtube;
+  if (!account) throw new Error('YouTube is not connected');
+  if (!youtubeCanDelete(account)) {
+    throw new Error('YouTube-ൽ delete ചെയ്യാൻ permission ഇല്ല. YouTube "Reconnect" ചെയ്ത് വീണ്ടും ശ്രമിക്കൂ.');
+  }
+  const client = makeClient();
+  client.setCredentials(account.tokens);
+  const yt = google.youtube({ version: 'v3', auth: client });
+  try {
+    await yt.videos.delete({ id: videoId });
+  } catch (err) {
+    const code = err?.code || err?.response?.status;
+    if (code === 404) return { alreadyGone: true }; // already deleted on YouTube
+    if (code === 403) throw new Error('YouTube refused: reconnect YouTube and try again.');
+    throw err;
+  }
+  return { alreadyGone: false };
 }

@@ -9,7 +9,6 @@ import path from 'node:path';
 import { del, get, list, put } from '@vercel/blob';
 import { config } from './config.js';
 
-const MAX_JOBS = 30;
 
 // ---------- backends ----------
 
@@ -134,10 +133,25 @@ function queued(key, fn) {
   return next;
 }
 
+// Short in-memory cache for reads. Vercel Blob's free plan counts every read and write,
+// so we avoid reading the same file again and again within a few seconds.
+const cache = new Map(); // key -> { at, value }
+async function cachedRead(key, ttlMs) {
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < ttlMs) return structuredClone(hit.value);
+  const value = await backend.read(key);
+  cache.set(key, { at: Date.now(), value });
+  return structuredClone(value);
+}
+async function writeAndCache(key, value) {
+  await backend.write(key, value);
+  cache.set(key, { at: Date.now(), value: structuredClone(value) });
+}
+
 // ---------- accounts ----------
 
 export async function getAccounts() {
-  return (await backend.read('accounts.json')) || {};
+  return (await cachedRead('accounts.json', 20_000)) || {};
 }
 
 // `patch` is an object, or a function that gets the current accounts and returns one.
@@ -145,7 +159,7 @@ export function updateAccounts(patch) {
   return queued('accounts.json', async () => {
     const current = (await backend.read('accounts.json')) || {};
     const next = { ...current, ...(typeof patch === 'function' ? patch(current) : patch) };
-    await backend.write('accounts.json', next);
+    await writeAndCache('accounts.json', next);
     return next;
   });
 }
@@ -154,45 +168,88 @@ export function removeAccount(key) {
   return queued('accounts.json', async () => {
     const current = (await backend.read('accounts.json')) || {};
     delete current[key];
-    await backend.write('accounts.json', current);
+    await writeAndCache('accounts.json', current);
   });
 }
 
-// ---------- jobs (upload history) ----------
+// ---------- upload history ----------
+// All uploads live in one file (newest first), so the list costs a single read.
 
-const jobKey = (id) => `jobs/${String(id).replace(/[^a-z0-9]/gi, '')}.json`;
+const HISTORY = 'history.json';
+const MAX_HISTORY = 1000;
 
-export function saveJob(job) {
-  return queued(jobKey(job.id), () => backend.write(jobKey(job.id), job));
+async function readHistory(fresh = false) {
+  let history = fresh ? await backend.read(HISTORY) : await cachedRead(HISTORY, 3_000);
+  if (history) return history;
+  // First run after the update: bring over uploads saved by the older version (one file per job).
+  const found = [];
+  try {
+    const keys = await backend.listKeys('jobs');
+    found.push(...(await Promise.all(keys.map((k) => backend.read(k.key).catch(() => null)))));
+  } catch {
+    /* nothing to migrate */
+  }
+  // The very first version kept everything in jobs.json.
+  const legacy = await backend.read('jobs.json').catch(() => null);
+  if (Array.isArray(legacy)) found.push(...legacy);
+  const seen = new Set();
+  return found
+    .filter((j) => j && j.id && !seen.has(j.id) && seen.add(j.id))
+    .map(({ storedFile, ...j }) => j)
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 
-export async function getJob(id) {
-  return backend.read(jobKey(id));
+function changeHistory(fn) {
+  return queued(HISTORY, async () => {
+    const history = await readHistory(true);
+    const result = fn(history);
+    await writeAndCache(HISTORY, history.slice(0, MAX_HISTORY));
+    return result;
+  });
 }
 
 export async function listJobs() {
-  const keys = (await backend.listKeys('jobs')).sort((a, b) => b.time - a.time);
-  // Keep the history short.
-  await Promise.all(keys.slice(MAX_JOBS).map((k) => backend.remove(k.key).catch(() => {})));
-  const jobs = await Promise.all(keys.slice(0, MAX_JOBS).map((k) => backend.read(k.key).catch(() => null)));
-  return jobs.filter(Boolean).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  return readHistory();
+}
+
+export async function getJob(id) {
+  return (await readHistory()).find((j) => j.id === id) || null;
+}
+
+export function createJob(job) {
+  return changeHistory((history) => {
+    history.unshift(job);
+    return job;
+  });
+}
+
+// `fn` gets the stored job and changes it in place.
+export function updateJob(id, fn) {
+  return changeHistory((history) => {
+    const job = history.find((j) => j.id === id);
+    if (job) fn(job);
+    return job || null;
+  });
+}
+
+export function removeJob(id) {
+  return changeHistory((history) => {
+    const i = history.findIndex((j) => j.id === id);
+    if (i >= 0) history.splice(i, 1);
+    return i >= 0;
+  });
 }
 
 // Locally, anything still "running" when the server restarted can never finish.
 if (!useBlob) {
-  listJobs()
-    .then((jobs) => {
-      for (const job of jobs) {
-        let changed = false;
-        for (const p of Object.values(job.platforms)) {
-          if (p.state === 'pending' || p.state === 'running') {
-            p.state = 'error';
-            p.message = 'Server restarted during upload';
-            changed = true;
-          }
+  changeHistory((history) => {
+    for (const job of history) {
+      for (const p of Object.values(job.platforms || {})) {
+        if (p.state === 'pending' || p.state === 'running') {
+          p.state = 'error';
+          p.message = 'Server restarted during upload';
         }
-        if (changed) saveJob(job);
       }
-    })
-    .catch(() => {});
+    }
+  }).catch(() => {});
 }

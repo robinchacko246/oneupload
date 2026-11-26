@@ -418,41 +418,230 @@ function timeAgo(iso) {
   return new Date(iso).toLocaleDateString();
 }
 
+const UI_ICONS = {
+  trash:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg>',
+  open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+  remove: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+};
+
+let allJobs = [];
+let currentTab = 'all';
+let shown = 15;
+
+const isActive = (s) => s.state === 'pending' || s.state === 'running';
+const jobActive = (j) => Object.values(j.platforms || {}).some(isActive);
+const titleOf = (j) => (j.caption || '').split('\n')[0].trim() || j.fileName || 'Video';
+
+// ---------- toast ----------
+function toast(text, isError = false) {
+  const t = $('#toast');
+  t.textContent = text;
+  t.classList.toggle('error', isError);
+  t.hidden = false;
+  t.style.animation = 'none';
+  void t.offsetWidth;
+  t.style.animation = '';
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => (t.hidden = true), isError ? 6000 : 3000);
+}
+
+// ---------- confirm dialog ----------
+function askConfirm({ icon, title, text, yes = 'Delete' }) {
+  return new Promise((resolve) => {
+    $('#confirmIcon').innerHTML = icon;
+    $('#confirmTitle').textContent = title;
+    $('#confirmText').textContent = text;
+    $('#confirmYes').textContent = yes;
+    $('#confirm').hidden = false;
+    const done = (answer) => {
+      $('#confirm').hidden = true;
+      $('#confirmYes').onclick = $('#confirmNo').onclick = $('#confirm').onclick = null;
+      resolve(answer);
+    };
+    $('#confirmYes').onclick = () => done(true);
+    $('#confirmNo').onclick = () => done(false);
+    $('#confirm').onclick = (e) => e.target.id === 'confirm' && done(false);
+  });
+}
+
+// ---------- rendering ----------
+function rowLinks(j, p, s) {
+  const open =
+    s.url && !s.deleted
+      ? `<a class="icon-btn" href="${esc(s.url)}" target="_blank" rel="noopener" title="Open">${UI_ICONS.open}</a>`
+      : '';
+  const del =
+    s.state === 'done' && !s.deleted
+      ? `<button class="icon-btn del" data-del="${esc(j.id)}" data-platform="${p}" title="Delete from ${NAMES[p]}">${UI_ICONS.trash}</button>`
+      : '';
+  return `<span class="links">${open}${del}</span>`;
+}
+
+function renderAll(jobs) {
+  return jobs
+    .map((j) => {
+      const removeBtn = jobActive(j)
+        ? ''
+        : `<button class="icon-btn" data-remove="${esc(j.id)}" title="List-ൽ നിന്ന് മാറ്റുക">${UI_ICONS.remove}</button>`;
+      return `<div class="job" data-job="${esc(j.id)}">
+        <div class="job-head">
+          <b>${esc(titleOf(j))} <span class="muted">· ${j.type === 'reel' ? 'Reel' : 'Video'}</span></b>
+          <span class="menu"><time title="${esc(new Date(j.createdAt).toLocaleString())}">${timeAgo(j.createdAt)}</time>${removeBtn}</span>
+        </div>
+        ${Object.entries(j.platforms || {})
+          .map(([p, s]) => {
+            const active = isActive(s);
+            const mark = active ? '<span class="spin"></span> ' : s.deleted ? '' : s.state === 'done' ? '✓ ' : '✕ ';
+            const msg = s.deleted ? '<span class="tag deleted">Deleted</span>' : esc(s.message);
+            return `<div class="prow ${s.deleted ? 'deleted' : ''}">
+              <span class="pi ${PI_CLASS[p]}">${ICONS[p]}</span>
+              <span class="msg ${s.state}">${mark}${msg}</span>
+              ${rowLinks(j, p, s)}
+              ${active ? `<span class="bar ${s.progress ? '' : 'indef'}"><i style="width:${s.progress || 0}%"></i></span>` : ''}
+            </div>`;
+          })
+          .join('')}
+      </div>`;
+    })
+    .join('');
+}
+
+function renderPlatform(posts, p) {
+  return posts
+    .map(({ j, s }) => {
+      const sub = s.deleted
+        ? '<span class="tag deleted">Deleted</span>'
+        : `${timeAgo(j.createdAt)} · ${j.type === 'reel' ? 'Reel' : 'Video'}${s.account ? ` · @${esc(s.account)}` : ''}`;
+      return `<div class="post ${s.deleted ? 'deleted' : ''}">
+        <span class="pi ${PI_CLASS[p]}">${ICONS[p]}</span>
+        <span class="txt"><b>${esc(titleOf(j))}</b><small>${sub}</small></span>
+        ${rowLinks(j, p, s)}
+      </div>`;
+    })
+    .join('');
+}
+
+function render() {
+  // Tab counts: posts that are live on each platform.
+  const live = (p) => allJobs.filter((j) => j.platforms?.[p]?.state === 'done' && !j.platforms[p].deleted).length;
+  $$('[data-count]').forEach((el) => {
+    el.textContent = el.dataset.count === 'all' ? allJobs.length : live(el.dataset.count);
+  });
+  const hasFb = allJobs.some((j) => j.platforms?.facebook);
+  $('.tab[data-tab="facebook"]').hidden = !hasFb;
+  if (!hasFb && currentTab === 'facebook') currentTab = 'all';
+  $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === currentTab));
+
+  let html = '';
+  let total = 0;
+  if (currentTab === 'all') {
+    total = allJobs.length;
+    html = renderAll(allJobs.slice(0, shown));
+  } else {
+    const posts = allJobs
+      .filter((j) => j.platforms?.[currentTab]?.state === 'done')
+      .map((j) => ({ j, s: j.platforms[currentTab] }));
+    total = posts.length;
+    html = renderPlatform(posts.slice(0, shown), currentTab);
+  }
+  $('#jobs').innerHTML =
+    html ||
+    `<div class="empty"><span class="big">🎬</span>${
+      currentTab === 'all' ? 'ഇതുവരെ ഒന്നുമില്ല. ആദ്യത്തെ video അപ്‌ലോഡ് ചെയ്യൂ!' : `${NAMES[currentTab]}-ൽ ഇതുവരെ ഒന്നുമില്ല`
+    }</div>`;
+  $('#more').hidden = total <= shown;
+  $('#more').textContent = `Show more (${total - shown})`;
+}
+
 async function loadJobs() {
-  let jobs = [];
   try {
-    jobs = await apiFetch('/api/jobs').then((r) => r.json());
+    allJobs = await apiFetch('/api/jobs').then((r) => r.json());
   } catch {
     return;
   }
-  const box = $('#jobs');
-  if (!jobs.length) {
-    box.innerHTML = '<div class="empty"><span class="big">🎬</span>ഇതുവരെ ഒന്നുമില്ല. ആദ്യത്തെ video അപ്‌ലോഡ് ചെയ്യൂ!</div>';
-  } else {
-    box.innerHTML = jobs
-      .map(
-        (j) => `<div class="job">
-          <div class="job-head"><b>${esc(j.fileName)} <span class="muted">· ${j.type === 'reel' ? 'Reel' : 'Video'}</span></b>
-          <time title="${esc(new Date(j.createdAt).toLocaleString())}">${timeAgo(j.createdAt)}</time></div>
-          ${Object.entries(j.platforms)
-            .map(([p, s]) => {
-              const active = s.state === 'pending' || s.state === 'running';
-              return `<div class="prow">
-                <span class="pi ${PI_CLASS[p]}">${ICONS[p]}</span>
-                <span class="msg ${s.state}">${active ? '<span class="spin"></span> ' : s.state === 'done' ? '✓ ' : '✕ '}${esc(s.message)}</span>
-                ${s.url ? `<a class="open" href="${esc(s.url)}" target="_blank" rel="noopener">Open ↗</a>` : '<span></span>'}
-                ${active ? `<span class="bar ${s.progress ? '' : 'indef'}"><i style="width:${s.progress || 0}%"></i></span>` : ''}
-              </div>`;
-            })
-            .join('')}
-        </div>`,
-      )
-      .join('');
-  }
-  const active = jobs.some((j) => Object.values(j.platforms).some((s) => s.state === 'pending' || s.state === 'running'));
+  render();
+  // Only keep checking while something is uploading (saves storage operations).
   clearTimeout(loadJobs.timer);
-  loadJobs.timer = setTimeout(loadJobs, active ? 2500 : 20000);
+  if (allJobs.some(jobActive)) loadJobs.timer = setTimeout(loadJobs, 5000);
 }
+
+$('#tabs').addEventListener('click', (e) => {
+  const t = e.target.closest('.tab');
+  if (!t) return;
+  currentTab = t.dataset.tab;
+  shown = 15;
+  render();
+});
+$('#more').addEventListener('click', () => {
+  shown += 15;
+  render();
+});
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && loadJobs());
+
+// ---------- delete a post / take an upload off the list ----------
+async function deletePost(btn) {
+  const id = btn.dataset.del;
+  const p = btn.dataset.platform;
+  const job = allJobs.find((j) => j.id === id);
+  const extra = p === 'instagram' ? ' Facebook profile-ലേക്ക് auto-share ആയ copy Facebook-ൽ നിന്ന് വേറെ delete ചെയ്യണം.' : '';
+  const ok = await askConfirm({
+    icon: `<span class="pi ${PI_CLASS[p]}">${ICONS[p]}</span>`,
+    title: `${NAMES[p]}-ൽ നിന്ന് delete ചെയ്യണോ?`,
+    text: `"${titleOf(job)}" ${NAMES[p]}-ൽ നിന്ന് ഒഴിവാക്കും. ഇത് തിരിച്ചെടുക്കാൻ പറ്റില്ല.${extra}`,
+  });
+  if (!ok) return;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>';
+  try {
+    const res = await apiFetch(`/api/jobs/${encodeURIComponent(id)}/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform: p }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || 'Delete failed');
+    const i = allJobs.findIndex((j) => j.id === id);
+    if (i >= 0) allJobs[i] = json;
+    render();
+    toast(`${NAMES[p]}-ൽ നിന്ന് delete ചെയ്തു ✓`);
+  } catch (err) {
+    btn.disabled = false;
+    btn.innerHTML = UI_ICONS.trash;
+    toast(err.message, true);
+  }
+}
+
+async function takeOffList(btn) {
+  const id = btn.dataset.remove;
+  const job = allJobs.find((j) => j.id === id);
+  const ok = await askConfirm({
+    icon: UI_ICONS.remove,
+    title: 'List-ൽ നിന്ന് മാറ്റണോ?',
+    text: `"${titleOf(job)}" ഈ list-ൽ നിന്ന് മാത്രം മാറും. YouTube/Instagram-ലെ post അവിടെ തന്നെ ഉണ്ടാവും.`,
+    yes: 'Remove',
+  });
+  if (!ok) return;
+  const card = btn.closest('.job');
+  card?.classList.add('removing');
+  try {
+    const res = await apiFetch(`/api/jobs/${encodeURIComponent(id)}/remove`, { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not remove');
+    allJobs = allJobs.filter((j) => j.id !== id);
+    setTimeout(render, 250);
+  } catch (err) {
+    card?.classList.remove('removing');
+    toast(err.message, true);
+  }
+}
+
+$('#jobs').addEventListener('click', (e) => {
+  const delBtn = e.target.closest('[data-del]');
+  if (delBtn) return deletePost(delBtn);
+  const listBtn = e.target.closest('[data-remove]');
+  if (listBtn) return takeOffList(listBtn);
+});
 
 loadStatus().catch(() => {});
 loadJobs();
+

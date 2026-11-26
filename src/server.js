@@ -9,9 +9,31 @@ import { del as blobDel, get as blobGet } from '@vercel/blob';
 import { handleUpload } from '@vercel/blob/client';
 import { waitUntil } from '@vercel/functions';
 import { config } from './config.js';
-import { getAccounts, getJob, listJobs, removeAccount, saveJob, useBlob, withBlobAccess } from './store.js';
-import { uploadToYouTube, youtubeAuthUrl, youtubeConfigured, youtubeHandleCallback } from './youtube.js';
 import {
+  createJob,
+  getAccounts,
+  getJob,
+  listJobs,
+  removeAccount,
+  removeJob,
+  updateJob,
+  useBlob,
+  withBlobAccess,
+} from './store.js';
+import {
+  deleteYouTubeVideo,
+  uploadToYouTube,
+  youtubeAuthUrl,
+  youtubeCanDelete,
+  youtubeConfigured,
+  youtubeHandleCallback,
+  youtubeIdFromUrl,
+} from './youtube.js';
+import {
+  deleteFacebookVideo,
+  deleteInstagramMedia,
+  facebookIdFromUrl,
+  instagramCanDelete,
   metaAuthUrl,
   metaConfigured,
   metaHandleCallback,
@@ -225,6 +247,7 @@ app.get(
         configured: youtubeConfigured(),
         connected: Boolean(youtube),
         channelTitle: youtube?.channelTitle,
+        canDelete: youtubeCanDelete(youtube),
       },
       meta: {
         configured: metaConfigured(),
@@ -233,6 +256,7 @@ app.get(
         selectedPageId: page?.id || null,
         pageName: page?.name || null,
         igUsername: page?.ig?.username || null,
+        canDeleteInstagram: instagramCanDelete(accounts),
       },
     });
   }),
@@ -307,7 +331,8 @@ async function startJob(res, fields, source, fileName) {
     caption: fields.caption,
     platforms: Object.fromEntries(fields.platforms.map((p) => [p, { state: 'pending', message: 'Waiting' }])),
   };
-  await saveJob(job);
+  await createJob(job);
+  liveJobs.set(job.id, job);
   res.json({ jobId: job.id });
   const title = fields.ytTitle || fields.caption.split('\n')[0].slice(0, 100) || fileName;
   // waitUntil keeps the work going on Vercel after the reply has been sent.
@@ -357,16 +382,20 @@ async function downloadBlob(url, dest) {
   await pipeline(Readable.fromWeb(result.stream), fs.createWriteStream(dest));
 }
 
+// Jobs running on this server instance, with live progress. Only important changes
+// (started / posted / failed) are written to storage, to keep storage operations low.
+const liveJobs = new Map();
+
 async function runJob(job, input, source) {
   const isShort = job.type === 'reel';
 
-  // Save progress, but not more than every 2 seconds unless something important changed.
-  let lastSave = 0;
-  const update = (platform, patch, important = true) => {
+  const update = (platform, patch, save = false) => {
     job.platforms[platform] = { ...job.platforms[platform], ...patch, updatedAt: new Date().toISOString() };
-    if (!important && Date.now() - lastSave < 2000) return;
-    lastSave = Date.now();
-    saveJob(job).catch((err) => console.error('Could not save job', err));
+    if (!save) return;
+    const snapshot = { ...job.platforms[platform] };
+    updateJob(job.id, (stored) => {
+      stored.platforms[platform] = { ...stored.platforms[platform], ...snapshot };
+    }).catch((err) => console.error('Could not save job', err));
   };
   const platforms = Object.keys(job.platforms);
 
@@ -391,7 +420,7 @@ async function runJob(job, input, source) {
             privacy: input.privacy,
             isShort,
           },
-          (pct) => update('youtube', { message: `Uploading ${pct}%`, progress: pct }, false),
+          (pct) => update('youtube', { message: `Uploading ${pct}%`, progress: pct }),
         ),
       facebook: () =>
         uploadToFacebook({ filePath, title: input.ytTitle, description: input.caption, isShort }, (msg) =>
@@ -410,27 +439,43 @@ async function runJob(job, input, source) {
 
     await Promise.allSettled(
       platforms.map(async (platform) => {
-        update(platform, { state: 'running', message: 'Starting' });
+        update(platform, { state: 'running', message: 'Starting' }, true);
         try {
           const result = await tasks[platform]();
           let message = result.note || 'Posted';
           if (platform === 'youtube' && result.privacy && result.privacy !== input.privacy) {
             message = `Uploaded, but YouTube set it to "${result.privacy}" (unverified Google project). Change it in YouTube Studio.`;
           }
-          update(platform, { state: 'done', message, url: result.url, progress: 100 });
+          update(
+            platform,
+            {
+              state: 'done',
+              message,
+              url: result.url,
+              postId: result.id,
+              pageId: result.pageId,
+              account: result.account,
+              progress: 100,
+            },
+            true,
+          );
         } catch (err) {
           console.error(`[${platform}]`, err);
-          update(platform, { state: 'error', message: err.message });
+          update(platform, { state: 'error', message: err.message }, true);
         }
       }),
     );
   } catch (err) {
     console.error('[job]', err);
     platforms.forEach((p) => {
-      if (job.platforms[p].state !== 'done') update(p, { state: 'error', message: err.message });
+      if (job.platforms[p].state !== 'done') update(p, { state: 'error', message: err.message }, true);
     });
   } finally {
-    await saveJob(job).catch((err) => console.error('Could not save job', err));
+    // Final save with everything, then clean up.
+    await updateJob(job.id, (stored) => {
+      stored.platforms = { ...stored.platforms, ...job.platforms };
+    }).catch((err) => console.error('Could not save job', err));
+    liveJobs.delete(job.id);
     if (tempFile) fs.rmSync(tempFile, { force: true });
     if (source.kind === 'blob') await blobDel(source.url).catch(() => {});
   }
@@ -439,16 +484,67 @@ async function runJob(job, input, source) {
 app.get(
   '/api/jobs',
   asyncRoute(async (req, res) => {
-    res.json(await listJobs());
+    const jobs = await listJobs();
+    // Show live progress for jobs running on this instance.
+    res.json(jobs.map((j) => liveJobs.get(j.id) || j));
   }),
 );
 
 app.get(
   '/api/jobs/:id',
   asyncRoute(async (req, res) => {
-    const job = await getJob(req.params.id);
+    const job = liveJobs.get(req.params.id) || (await getJob(req.params.id));
     if (!job) return res.status(404).json({ error: 'Not found' });
     res.json(job);
+  }),
+);
+
+// ---------- deleting posts ----------
+
+const deleters = {
+  youtube: (p) => deleteYouTubeVideo(p.postId || youtubeIdFromUrl(p.url)),
+  facebook: (p) => deleteFacebookVideo(p.postId || facebookIdFromUrl(p.url), p.pageId),
+  instagram: (p) => {
+    if (!p.postId) {
+      throw new Error('ഈ പഴയ Instagram post app-ൽ നിന്ന് delete ചെയ്യാൻ പറ്റില്ല. Instagram-ൽ "Open" ചെയ്ത് delete ചെയ്യൂ.');
+    }
+    return deleteInstagramMedia(p.postId, p.pageId);
+  },
+};
+
+// Delete one platform's post (from YouTube / Instagram / Facebook itself).
+app.post(
+  '/api/jobs/:id/delete',
+  asyncRoute(async (req, res) => {
+    const platform = String(req.body?.platform || '');
+    if (!deleters[platform]) return res.status(400).json({ error: 'Unknown platform' });
+    const job = await getJob(req.params.id);
+    const entry = job?.platforms?.[platform];
+    if (!entry) return res.status(404).json({ error: 'Not found' });
+    if (entry.state !== 'done' || entry.deleted) return res.status(400).json({ error: 'Nothing to delete' });
+    try {
+      await deleters[platform](entry);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    const updated = await updateJob(job.id, (stored) => {
+      stored.platforms[platform] = {
+        ...stored.platforms[platform],
+        deleted: true,
+        deletedAt: new Date().toISOString(),
+        message: 'Deleted',
+      };
+    });
+    res.json(updated);
+  }),
+);
+
+// Remove an upload from this list only (posts stay online).
+app.post(
+  '/api/jobs/:id/remove',
+  asyncRoute(async (req, res) => {
+    if (liveJobs.has(req.params.id)) return res.status(400).json({ error: 'Upload is still running' });
+    res.json({ ok: await removeJob(req.params.id) });
   }),
 );
 

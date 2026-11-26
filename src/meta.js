@@ -10,6 +10,8 @@ const SCOPES = [
   'business_management',
   'instagram_basic',
   'instagram_content_publish',
+  // Needed to delete Instagram posts from the app.
+  'instagram_manage_contents',
 ];
 
 const GRAPH = () => `https://graph.facebook.com/${config.meta.version}`;
@@ -115,11 +117,66 @@ export async function metaHandleCallback(code) {
     throw new Error('No Facebook Pages found. While logging in, tick your Page (and its Instagram account) when Facebook asks which ones to allow.');
   }
 
+  // Remember which permissions were actually granted (e.g. whether deleting is allowed).
+  let permissions = [];
+  try {
+    const perms = await graphGet('/me/permissions', { access_token: long.access_token });
+    permissions = (perms.data || []).filter((p) => p.status === 'granted').map((p) => p.permission);
+  } catch {
+    /* optional */
+  }
+
   await updateAccounts((all) => {
     const previous = all.meta?.selectedPageId;
     const selected = pages.find((p) => p.id === previous) || pages.find((p) => p.ig) || pages[0];
-    return { meta: { pages, selectedPageId: selected.id, connectedAt: new Date().toISOString() } };
+    return { meta: { pages, permissions, selectedPageId: selected.id, connectedAt: new Date().toISOString() } };
   });
+}
+
+export function instagramCanDelete(accounts) {
+  return Boolean(accounts.meta?.permissions?.includes('instagram_manage_contents'));
+}
+
+async function graphDelete(path, token) {
+  const url = new URL(`${GRAPH()}${path}`);
+  url.searchParams.set('access_token', token);
+  const res = await fetch(url, { method: 'DELETE' });
+  try {
+    return await readGraphResponse(res);
+  } catch (err) {
+    // Already deleted, or never existed: treat as done.
+    if (/does not exist|cannot be loaded|Unsupported delete request|not found/i.test(err.message)) {
+      return { alreadyGone: true };
+    }
+    throw err;
+  }
+}
+
+export function facebookIdFromUrl(url) {
+  const m = String(url || '').match(/(?:reel|videos)\/(\d+)/);
+  return m ? m[1] : null;
+}
+
+// Uses the Page saved with the upload (pageId), so it still works after switching Pages.
+async function pageForDelete(pageId) {
+  const accounts = await getAccounts();
+  const pages = accounts.meta?.pages || [];
+  return { accounts, page: pages.find((p) => p.id === pageId) || pageFromAccounts(accounts) };
+}
+
+export async function deleteFacebookVideo(videoId, pageId) {
+  const { page } = await pageForDelete(pageId);
+  if (!page) throw new Error('Facebook is not connected');
+  return graphDelete(`/${videoId}`, page.accessToken);
+}
+
+export async function deleteInstagramMedia(mediaId, pageId) {
+  const { accounts, page } = await pageForDelete(pageId);
+  if (!page) throw new Error('Instagram is not connected');
+  if (!instagramCanDelete(accounts)) {
+    throw new Error('Instagram-ൽ delete ചെയ്യാൻ permission ഇല്ല. Instagram "Reconnect" ചെയ്ത് വീണ്ടും ശ്രമിക്കൂ.');
+  }
+  return graphDelete(`/${mediaId}`, page.accessToken);
 }
 
 export function pageFromAccounts(accounts) {
@@ -181,16 +238,16 @@ export async function uploadToFacebook({ filePath, title, description, isShort }
 
   if (!isShort) {
     onStatus?.('Uploading video to Facebook Page');
-    return facebookRegularVideo(page, { filePath, title, description });
+    return { ...(await facebookRegularVideo(page, { filePath, title, description })), pageId: page.id };
   }
   try {
     onStatus?.('Uploading reel to Facebook Page');
-    return await facebookReel(page, { filePath, description });
+    return { ...(await facebookReel(page, { filePath, description })), pageId: page.id };
   } catch (err) {
     // Reels must be 3–90 s and vertical. If Facebook refuses, post it as a normal video instead.
     onStatus?.(`Reel refused (${err.message}); posting as a normal video`);
     const result = await facebookRegularVideo(page, { filePath, title, description });
-    return { ...result, note: 'Posted as a normal video because Facebook refused it as a Reel' };
+    return { ...result, pageId: page.id, note: 'Posted as a normal video because Facebook refused it as a Reel' };
   }
 }
 
@@ -249,5 +306,5 @@ export async function uploadToInstagram({ filePath, caption, publicVideoUrl, sha
   } catch {
     /* permalink is optional */
   }
-  return { id: published.id, url };
+  return { id: published.id, url, pageId: page.id, account: page.ig.username };
 }
