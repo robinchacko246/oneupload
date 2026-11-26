@@ -51,22 +51,80 @@ app.get('/media/:file', (req, res) => {
   res.sendFile(full);
 });
 
-// ---------- password protection for everything else ----------
-app.use((req, res, next) => {
-  if (!config.appPassword) return next();
-  const header = req.headers.authorization || '';
-  const [scheme, encoded] = header.split(' ');
-  if (scheme === 'Basic' && encoded) {
-    const pass = Buffer.from(encoded, 'base64').toString().split(':').slice(1).join(':');
-    const a = Buffer.from(pass);
-    const b = Buffer.from(config.appPassword);
-    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return next();
+// ---------- login (password -> signed session cookie) ----------
+const SESSION_COOKIE = 'ou_session';
+const SESSION_DAYS = 30;
+
+function sessionSig(exp) {
+  // Changing APP_PASSWORD or MEDIA_SECRET logs everyone out.
+  return crypto.createHmac('sha256', `session:${config.appPassword}:${config.mediaSecret}`).update(String(exp)).digest('hex');
+}
+
+function readCookie(req, name) {
+  for (const part of String(req.headers.cookie || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
   }
-  res.set('WWW-Authenticate', 'Basic realm="Uploader"');
-  res.status(401).send('Password required');
-});
+  return '';
+}
+
+function hasSession(req) {
+  const [exp, sig] = readCookie(req, SESSION_COOKIE).split('.');
+  if (!exp || !sig || Number(exp) < Date.now()) return false;
+  const a = Buffer.from(sig);
+  const b = Buffer.from(sessionSig(exp));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function passwordMatches(pass) {
+  const a = crypto.createHash('sha256').update(String(pass)).digest();
+  const b = crypto.createHash('sha256').update(config.appPassword).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+// Scripts (and curl) may still use HTTP Basic auth.
+function hasBasicAuth(req) {
+  const [scheme, encoded] = String(req.headers.authorization || '').split(' ');
+  if (scheme !== 'Basic' || !encoded) return false;
+  return passwordMatches(Buffer.from(encoded, 'base64').toString().split(':').slice(1).join(':'));
+}
+
+function isHttps(req) {
+  return req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0] === 'https';
+}
 
 app.use(express.json());
+
+app.post('/api/login', async (req, res) => {
+  if (!config.appPassword || passwordMatches(req.body?.password || '')) {
+    const exp = Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000;
+    res.cookie(SESSION_COOKIE, `${exp}.${sessionSig(exp)}`, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isHttps(req),
+      maxAge: SESSION_DAYS * 24 * 60 * 60 * 1000,
+      path: '/',
+    });
+    return res.json({ ok: true });
+  }
+  await new Promise((r) => setTimeout(r, 600)); // slow down guessing
+  res.status(401).json({ error: 'Wrong password' });
+});
+
+app.post('/api/logout', (req, res) => {
+  res.clearCookie(SESSION_COOKIE, { path: '/' });
+  res.json({ ok: true });
+});
+
+const OPEN_PATHS = new Set(['/login', '/login.html', '/login.js', '/style.css', '/favicon.svg']);
+
+app.use((req, res, next) => {
+  if (!config.appPassword || OPEN_PATHS.has(req.path) || hasSession(req) || hasBasicAuth(req)) return next();
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Login required' });
+  res.redirect(`/login.html?next=${encodeURIComponent(req.originalUrl)}`);
+});
+
+app.get('/login', (req, res) => res.redirect('/login.html'));
 app.use(express.static(config.paths.public));
 
 const asyncRoute = (fn) => (req, res) =>

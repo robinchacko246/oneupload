@@ -2,95 +2,169 @@
 <html lang="ml">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>One Upload → YouTube · Instagram · Facebook</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0a12" />
+  <title>One Upload · YouTube + Instagram</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Malayalam:wght@400;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <header>
-    <h1>One Upload</h1>
-    <p class="sub">ഒരു തവണ അപ്‌ലോഡ് ചെയ്യൂ, മൂന്നിടത്തും പോസ്റ്റ് ആവും</p>
+  <div class="bg"><span></span><span></span><span></span></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      </div>
+      <div>
+        <h1>One <span class="grad-text">Upload</span></h1>
+        <p>ഒരു തവണ അപ്‌ലോഡ് ചെയ്യൂ, എല്ലായിടത്തും പോസ്റ്റ് ആവും</p>
+      </div>
+    </div>
+    <button class="btn small ghost" id="logout" title="Logout">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 17l5-5-5-5M20 12H9M12 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7"/></svg>
+      Logout
+    </button>
   </header>
 
-  <main>
-    <div id="banner" class="banner" hidden></div>
+  <div class="banner-wrap"><div id="banner" class="banner" hidden></div></div>
 
-    <section class="card">
-      <h2>Accounts <span class="ml">അക്കൗണ്ടുകൾ</span></h2>
-      <div class="accounts">
-        <div class="account" id="acc-youtube">
-          <div class="acc-head"><span class="dot yt"></span>YouTube</div>
-          <div class="acc-body">Loading…</div>
+  <main class="app">
+    <div class="col">
+      <section class="card">
+        <div class="card-title"><h2>New post</h2><span class="ml">പുതിയ പോസ്റ്റ്</span></div>
+        <form id="form">
+          <label class="drop" id="drop">
+            <input type="file" name="video" id="video" accept="video/*" />
+            <div id="dropEmpty">
+              <div class="cloud" style="margin:0 auto 10px">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M20 16.5V19a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2.5"/></svg>
+              </div>
+              <strong>Video തിരഞ്ഞെടുക്കൂ</strong><br />
+              <small>Tap ചെയ്യൂ അല്ലെങ്കിൽ drag ചെയ്യൂ · max 300 MB</small>
+            </div>
+            <div class="file-row" id="dropFile" hidden>
+              <video id="preview" muted playsinline loop></video>
+              <div class="meta">
+                <b id="fileName"></b>
+                <div class="tags" id="fileTags"></div>
+                <div><button type="button" class="btn small" id="change">Change video</button></div>
+              </div>
+            </div>
+          </label>
+
+          <div class="group">
+            <span class="label">Type</span>
+            <div class="segmented">
+              <label><input type="radio" name="type" value="reel" checked /><span>Reel / Short<small>vertical · ≤ 90s</small></span></label>
+              <label><input type="radio" name="type" value="video" /><span>Long video<small>horizontal / long</small></span></label>
+            </div>
+          </div>
+
+          <div class="group">
+            <span class="label">Post to</span>
+            <div class="platforms">
+              <label class="ptile">
+                <input type="checkbox" name="platforms" value="youtube" checked />
+                <span class="inner"><span class="pi yt" data-icon="youtube"></span>YouTube<small>Shorts / video</small></span>
+                <span class="check"><svg viewBox="0 0 24 24" fill="none" stroke="#06281c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg></span>
+              </label>
+              <label class="ptile">
+                <input type="checkbox" name="platforms" value="instagram" checked />
+                <span class="inner"><span class="pi ig" data-icon="instagram"></span>Instagram<small>Reel → FB profile</small></span>
+                <span class="check"><svg viewBox="0 0 24 24" fill="none" stroke="#06281c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg></span>
+              </label>
+              <label class="ptile" title="Facebook Page-ലേക്ക് മാത്രം. Profile-ലേക്ക് Instagram auto-share വഴി പോവും.">
+                <input type="checkbox" name="platforms" value="facebook" />
+                <span class="inner"><span class="pi fb" data-icon="facebook"></span>FB Page<small>optional</small></span>
+                <span class="check"><svg viewBox="0 0 24 24" fill="none" stroke="#06281c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="group">
+            <span class="label">Caption</span>
+            <textarea name="caption" rows="5" maxlength="2200" placeholder="Caption എഴുതൂ… #kerala #travel"></textarea>
+            <div class="counter" id="capCount">0 / 2200</div>
+          </div>
+
+          <details class="more">
+            <summary>
+              <span class="pi yt" data-icon="youtube" style="width:26px;height:26px;border-radius:8px"></span>
+              YouTube settings
+              <svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+            </summary>
+            <div class="body">
+              <label><span class="label">Title <small class="muted">(ഒഴിച്ചിട്ടാൽ caption-ന്റെ ആദ്യ വരി)</small></span><input class="text" name="ytTitle" maxlength="100" /></label>
+              <label><span class="label">Description <small class="muted">(ഒഴിച്ചിട്ടാൽ caption)</small></span><textarea name="ytDescription" rows="3" maxlength="5000"></textarea></label>
+              <label><span class="label">Tags <small class="muted">(comma കൊണ്ട്)</small></span><input class="text" name="tags" placeholder="kerala, travel, vlog" /></label>
+              <label><span class="label">Visibility</span>
+                <select class="text" name="privacy">
+                  <option value="public">Public</option>
+                  <option value="unlisted">Unlisted</option>
+                  <option value="private">Private</option>
+                </select>
+              </label>
+            </div>
+          </details>
+
+          <button type="submit" class="btn-primary" id="submit">🚀 Upload everywhere</button>
+        </form>
+      </section>
+    </div>
+
+    <div class="col">
+      <section class="card">
+        <div class="card-title"><h2>Accounts</h2><span class="ml">അക്കൗണ്ടുകൾ</span></div>
+        <div class="accounts">
+          <div class="account" id="acc-youtube">
+            <span class="pi yt" data-icon="youtube"></span>
+            <div class="who"><div class="skeleton" style="width:60%"></div></div>
+          </div>
+          <div class="account" id="acc-meta">
+            <span class="pi ig" data-icon="instagram"></span>
+            <div class="who"><div class="skeleton" style="width:70%"></div></div>
+          </div>
         </div>
-        <div class="account" id="acc-meta">
-          <div class="acc-head"><span class="dot fb"></span>Facebook + <span class="dot ig"></span>Instagram</div>
-          <div class="acc-body">Loading…</div>
+      </section>
+
+      <section class="card">
+        <div class="card-title"><h2>Recent uploads</h2><span class="ml">മുൻ അപ്‌ലോഡുകൾ</span></div>
+        <div id="jobs" class="jobs"><div class="skeleton"></div></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- upload animation -->
+  <div class="overlay" id="overlay" hidden>
+    <div class="stage" role="dialog" aria-modal="true" aria-labelledby="stageTitle">
+      <div class="orbit" id="orbit">
+        <svg class="ring" viewBox="0 0 210 210">
+          <defs>
+            <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#8b6cff" /><stop offset=".55" stop-color="#ff4f9a" /><stop offset="1" stop-color="#ffb547" />
+            </linearGradient>
+          </defs>
+          <circle class="track" cx="105" cy="105" r="95" />
+          <circle class="fill" id="ringFill" cx="105" cy="105" r="95" stroke-dasharray="597" stroke-dashoffset="597" />
+        </svg>
+        <div class="sat"><i></i></div>
+        <div class="center" id="center">
+          <div class="pct" id="pct">0<small>%</small></div>
         </div>
       </div>
-    </section>
-
-    <section class="card">
-      <h2>New post <span class="ml">പുതിയ പോസ്റ്റ്</span></h2>
-      <form id="form">
-        <label class="drop" id="drop">
-          <input type="file" name="video" id="video" accept="video/*" required />
-          <span id="dropText">Video തിരഞ്ഞെടുക്കൂ (അല്ലെങ്കിൽ ഇവിടെ drag ചെയ്യൂ)</span>
-          <video id="preview" muted playsinline controls hidden></video>
-        </label>
-
-        <div class="row">
-          <span class="label">Type</span>
-          <label class="pill"><input type="radio" name="type" value="reel" checked /> Reel / Short (vertical, ≤ 90s)</label>
-          <label class="pill"><input type="radio" name="type" value="video" /> Long video</label>
-        </div>
-
-        <div class="row">
-          <span class="label">Post to</span>
-          <label class="pill"><input type="checkbox" name="platforms" value="youtube" checked /> YouTube</label>
-          <label class="pill"><input type="checkbox" name="platforms" value="instagram" checked /> Instagram</label>
-          <label class="pill" title="Facebook Page-ലേക്ക് മാത്രം. Profile-ലേക്ക് Instagram auto-share വഴി പോവും."><input type="checkbox" name="platforms" value="facebook" /> Facebook Page</label>
-        </div>
-
-        <label class="field">
-          <span>Caption <small>(Instagram, Facebook — YouTube description-ഉം ഇതുതന്നെ, താഴെ മാറ്റിയില്ലെങ്കിൽ)</small></span>
-          <textarea name="caption" rows="5" maxlength="2200" placeholder="Caption + #hashtags"></textarea>
-          <small class="count" id="capCount">0 / 2200</small>
-        </label>
-
-        <details>
-          <summary>YouTube settings</summary>
-          <label class="field">
-            <span>YouTube title <small>(ഒഴിച്ചിട്ടാൽ caption-ന്റെ ആദ്യ വരി)</small></span>
-            <input name="ytTitle" maxlength="100" />
-          </label>
-          <label class="field">
-            <span>YouTube description <small>(ഒഴിച്ചിട്ടാൽ caption)</small></span>
-            <textarea name="ytDescription" rows="4" maxlength="5000"></textarea>
-          </label>
-          <label class="field">
-            <span>Tags <small>(comma കൊണ്ട് വേർതിരിക്കുക)</small></span>
-            <input name="tags" placeholder="malayalam, vlog, kerala" />
-          </label>
-          <label class="field">
-            <span>Visibility</span>
-            <select name="privacy">
-              <option value="public">Public</option>
-              <option value="unlisted">Unlisted</option>
-              <option value="private">Private</option>
-            </select>
-          </label>
-        </details>
-
-        <button type="submit" id="submit">Upload everywhere 🚀</button>
-        <div class="progress" id="sendProgress" hidden><div></div><span></span></div>
-      </form>
-    </section>
-
-    <section class="card">
-      <h2>History <span class="ml">മുൻ അപ്‌ലോഡുകൾ</span></h2>
-      <div id="jobs" class="jobs"><p class="muted">ഇതുവരെ ഒന്നുമില്ല</p></div>
-    </section>
-  </main>
+      <h3 id="stageTitle">Uploading…</h3>
+      <p id="stageText">Video അയക്കുന്നു</p>
+      <div class="targets" id="targets"></div>
+      <div class="actions">
+        <button class="btn" id="hideOverlay" hidden>Close · background-ൽ തുടരും</button>
+        <button class="btn-primary" id="doneOverlay" style="width:auto;padding:12px 28px" hidden>Done 🎉</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/app.js" type="module"></script>
 </body>
