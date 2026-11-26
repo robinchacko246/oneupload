@@ -203,6 +203,7 @@ function resetForm(form) {
   restorePlatforms();
   clearFile();
   $('#capCount').textContent = '0 / 2200';
+  updateWhen();
 }
 
 // ---------- upload animation ----------
@@ -235,6 +236,26 @@ const overlay = {
     $('#center').innerHTML = `<div class="pct">${Math.round(p)}<small>%</small></div>`;
     if (title) $('#stageTitle').textContent = title;
     if (text) $('#stageText').textContent = text;
+  },
+
+  // A scheduled post or draft was saved (nothing is posted yet).
+  saved(job) {
+    this.ring.style.strokeDashoffset = '0';
+    $('#orbit').classList.add('done');
+    const scheduled = job.status === 'scheduled';
+    $('#center').innerHTML = `<div style="font-size:60px;line-height:1">${scheduled ? '📅' : '📝'}</div>`;
+    $('#stageTitle').textContent = scheduled ? 'Scheduled!' : 'Draft saved';
+    $('#stageText').textContent = scheduled
+      ? `${fmtWhen(job.scheduledAt)}-ന് ഓട്ടോമാറ്റിക്കായി post ആവും`
+      : 'Queue → Drafts-ൽ നിന്ന് എപ്പോൾ വേണമെങ്കിലും post ചെയ്യാം';
+    $$('#targets .target').forEach((t) => {
+      t.className = 'target done';
+      t.querySelector('.badge').innerHTML = ICONS.check;
+      t.querySelector('small').textContent = scheduled ? 'Scheduled' : 'Draft';
+    });
+    $('#hideOverlay').hidden = true;
+    $('#doneOverlay').hidden = false;
+    if (scheduled) confetti();
   },
 
   launch(jobId) {
@@ -388,9 +409,20 @@ $('#form').addEventListener('submit', async (e) => {
     return alert(`Video 300 MB-യിൽ കൂടുതലാണ് (${mb(file.size)}). ചെറുതാക്കി വീണ്ടും ശ്രമിക്കൂ.`);
   }
 
+  const mode = currentMode();
+  let scheduledAt = null;
+  if (mode === 'schedule') {
+    const when = new Date($('#scheduleAt').value);
+    if (Number.isNaN(when.getTime())) return toast('Schedule ചെയ്യാനുള്ള തീയതിയും സമയവും തിരഞ്ഞെടുക്കൂ', true);
+    if (when.getTime() < Date.now()) return toast('ആ സമയം കഴിഞ്ഞുപോയി. ഭാവിയിലെ ഒരു സമയം തിരഞ്ഞെടുക്കൂ', true);
+    scheduledAt = when.toISOString();
+  }
+
   const data = new FormData(form);
   data.delete('platforms');
   data.set('platforms', platforms.join(','));
+  data.set('mode', mode);
+  if (scheduledAt) data.set('scheduledAt', scheduledAt);
 
   const submit = $('#submit');
   submit.disabled = true;
@@ -398,9 +430,11 @@ $('#form').addEventListener('submit', async (e) => {
   const onProgress = (pct) =>
     overlay.progress(pct, 'Uploading…', `${mb((file.size * pct) / 100)} / ${mb(file.size)}`);
   try {
-    const { jobId } = status.blobUploads ? await sendViaBlob(file, data, onProgress) : await sendDirect(data, onProgress);
+    const result = status.blobUploads ? await sendViaBlob(file, data, onProgress) : await sendDirect(data, onProgress);
     resetForm(form);
-    overlay.launch(jobId);
+    if (mode === 'now') overlay.launch(result.jobId);
+    else overlay.saved(result);
+    loadJobs();
   } catch (err) {
     overlay.close();
     showBanner(`Upload failed: ${err.message}`, true);
@@ -408,6 +442,49 @@ $('#form').addEventListener('submit', async (e) => {
     submit.disabled = false;
   }
 });
+
+// ---------- when to post: now / schedule / draft ----------
+const currentMode = () => document.querySelector('input[name=mode]:checked')?.value || 'now';
+const pad = (n) => String(n).padStart(2, '0');
+const toLocalInput = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+function quickTimes() {
+  const now = new Date();
+  const at = (days, h, m = 0) => {
+    const d = new Date(now);
+    d.setDate(d.getDate() + days);
+    d.setHours(h, m, 0, 0);
+    return d;
+  };
+  const options = [];
+  const inHour = new Date(now.getTime() + 60 * 60 * 1000);
+  inHour.setMinutes(Math.ceil(inHour.getMinutes() / 15) * 15, 0, 0);
+  options.push(['+1 hour', inHour]);
+  if (at(0, 18) > now) options.push(['Today 6 PM', at(0, 18)]);
+  if (at(0, 20) > now) options.push(['Today 8 PM', at(0, 20)]);
+  options.push(['Tomorrow 9 AM', at(1, 9)], ['Tomorrow 6 PM', at(1, 18)]);
+  return options;
+}
+
+function updateWhen() {
+  const mode = currentMode();
+  $('#whenTime').hidden = mode !== 'schedule';
+  $('#submit').textContent = { now: '🚀 Upload everywhere', schedule: '📅 Schedule post', draft: '📝 Save draft' }[mode];
+  if (mode === 'schedule') {
+    const input = $('#scheduleAt');
+    input.min = toLocalInput(new Date());
+    if (!input.value || new Date(input.value) < new Date()) input.value = toLocalInput(quickTimes()[0][1]);
+    $('#quickTimes').innerHTML = quickTimes()
+      .map(([label, d]) => `<button type="button" data-at="${toLocalInput(d)}">${label}</button>`)
+      .join('');
+  }
+}
+$$('input[name=mode]').forEach((r) => r.addEventListener('change', updateWhen));
+$('#quickTimes').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-at]');
+  if (b) $('#scheduleAt').value = b.dataset.at;
+});
+updateWhen();
 
 // ---------- history ----------
 function timeAgo(iso) {
@@ -529,12 +606,15 @@ function renderPlatform(posts, p) {
 }
 
 function render() {
+  renderPlanner();
+  // The Posted page only shows uploads that went out (or are going out now).
+  const postedJobs = allJobs.filter((j) => j.status === 'posted' || j.status === 'posting');
   // Tab counts: posts that are live on each platform.
-  const live = (p) => allJobs.filter((j) => j.platforms?.[p]?.state === 'done' && !j.platforms[p].deleted).length;
+  const live = (p) => postedJobs.filter((j) => j.platforms?.[p]?.state === 'done' && !j.platforms[p].deleted).length;
   $$('[data-count]').forEach((el) => {
-    el.textContent = el.dataset.count === 'all' ? allJobs.length : live(el.dataset.count);
+    el.textContent = el.dataset.count === 'all' ? postedJobs.length : live(el.dataset.count);
   });
-  const hasFb = allJobs.some((j) => j.platforms?.facebook);
+  const hasFb = postedJobs.some((j) => j.platforms?.facebook);
   $('.tab[data-tab="facebook"]').hidden = !hasFb;
   if (!hasFb && currentTab === 'facebook') currentTab = 'all';
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === currentTab));
@@ -542,10 +622,10 @@ function render() {
   let html = '';
   let total = 0;
   if (currentTab === 'all') {
-    total = allJobs.length;
-    html = renderAll(allJobs.slice(0, shown));
+    total = postedJobs.length;
+    html = renderAll(postedJobs.slice(0, shown));
   } else {
-    const posts = allJobs
+    const posts = postedJobs
       .filter((j) => j.platforms?.[currentTab]?.state === 'done')
       .map((j) => ({ j, s: j.platforms[currentTab] }));
     total = posts.length;
@@ -671,6 +751,403 @@ $('#jobs').addEventListener('click', (e) => {
   const listBtn = e.target.closest('[data-remove]');
   if (listBtn) return takeOffList(listBtn);
 });
+
+// =====================================================================
+//  Planner: Queue, Drafts, Calendar, Ideas, Analytics
+// =====================================================================
+
+function fmtWhen(iso) {
+  return new Date(iso).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+}
+const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+const dayKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+function dayLabel(d) {
+  const today = new Date();
+  const tomorrow = new Date();
+  tomorrow.setDate(today.getDate() + 1);
+  if (dayKey(d) === dayKey(today)) return 'Today';
+  if (dayKey(d) === dayKey(tomorrow)) return 'Tomorrow';
+  return d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+}
+const platIcons = (j) =>
+  Object.keys(j.platforms || {})
+    .map((p) => `<span class="pi ${PI_CLASS[p]} mini" title="${NAMES[p]}">${ICONS[p]}</span>`)
+    .join('');
+function outcome(j) {
+  if (j.status !== 'posted') return j.status;
+  const states = Object.values(j.platforms || {});
+  return states.some((s) => s.state === 'error') ? 'failed' : 'posted';
+}
+const ST_LABEL = { scheduled: 'Scheduled', draft: 'Draft', posting: 'Posting…', posted: 'Posted', failed: 'Failed' };
+const EDIT_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4"/></svg>';
+
+function plannedItem(j, { showDay = false } = {}) {
+  const isDraft = j.status === 'draft';
+  const overdue = j.status === 'scheduled' && new Date(j.scheduledAt) < new Date();
+  const time = isDraft
+    ? '<b>📝</b><small>Draft</small>'
+    : `<b>${fmtTime(j.scheduledAt)}</b><small>${showDay ? dayLabel(new Date(j.scheduledAt)) : overdue ? 'due now' : ''}</small>`;
+  return `<div class="qitem ${overdue ? 'overdue' : ''}">
+    <div class="time">${time}</div>
+    <div class="body">
+      <b>${esc(titleOf(j))}</b>
+      <div class="plats">${platIcons(j)}<span class="st ${j.status}">${ST_LABEL[j.status]}</span><small class="muted">${j.type === 'reel' ? 'Reel' : 'Video'}</small></div>
+    </div>
+    <div class="acts">
+      <button class="btn small" data-act="now" data-id="${esc(j.id)}">⚡ Post now</button>
+      <button class="icon-btn" data-act="edit" data-id="${esc(j.id)}" title="Edit">${EDIT_ICON}</button>
+      <button class="icon-btn del" data-act="delete" data-id="${esc(j.id)}" title="Delete">${UI_ICONS.trash}</button>
+    </div>
+  </div>`;
+}
+
+function renderPlanner() {
+  const scheduled = allJobs
+    .filter((j) => j.status === 'scheduled')
+    .sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
+  const drafts = allJobs.filter((j) => j.status === 'draft');
+
+  $('#queueCount').hidden = !scheduled.length;
+  $('#queueCount').textContent = scheduled.length;
+
+  // "Coming up" on the Create page
+  $('#upNext').innerHTML = scheduled.length
+    ? scheduled.slice(0, 3).map((j) => plannedItem(j, { showDay: true })).join('')
+    : '<div class="empty"><span class="big">📅</span>Schedule ചെയ്ത posts ഇല്ല. "When → Schedule" തിരഞ്ഞെടുത്ത് സമയം വെക്കൂ.</div>';
+
+  // Queue, grouped by day
+  const groups = new Map();
+  for (const j of scheduled) {
+    const d = new Date(j.scheduledAt);
+    const key = dayKey(d);
+    if (!groups.has(key)) groups.set(key, { label: dayLabel(d), items: [] });
+    groups.get(key).items.push(j);
+  }
+  $('#queueList').innerHTML = groups.size
+    ? [...groups.values()]
+        .map((g) => `<div class="qday"><h4>${esc(g.label)}</h4><div class="items">${g.items.map((j) => plannedItem(j)).join('')}</div></div>`)
+        .join('')
+    : '<div class="empty"><span class="big">🗓️</span>Queue കാലിയാണ്. Create-ൽ "Schedule" തിരഞ്ഞെടുത്ത് post-ന് സമയം വെക്കൂ.</div>';
+
+  $('#draftList').innerHTML = drafts.length
+    ? drafts.map((j) => plannedItem(j)).join('')
+    : '<div class="empty"><span class="big">📝</span>Drafts ഇല്ല</div>';
+
+  if (!$('[data-view="calendar"].view').hidden) renderCalendar();
+}
+
+// ---------- actions on drafts / scheduled posts ----------
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-act]');
+  if (!btn) return;
+  const job = allJobs.find((j) => j.id === btn.dataset.id);
+  if (!job) return;
+  const act = btn.dataset.act;
+
+  if (act === 'edit') return openEditor(job);
+
+  if (act === 'now') {
+    const ok = await askConfirm({
+      icon: '<div style="font-size:34px">⚡</div>',
+      title: 'ഇപ്പോൾ തന്നെ post ചെയ്യണോ?',
+      text: `"${titleOf(job)}" ഇപ്പോൾ ${Object.keys(job.platforms).map((p) => NAMES[p]).join(', ')}-ൽ post ആവും.`,
+      yes: 'Post now',
+    });
+    if (!ok) return;
+    try {
+      const res = await apiFetch(`/api/jobs/${encodeURIComponent(job.id)}/publish`, { method: 'POST' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Could not post');
+      overlay.open(Object.keys(job.platforms));
+      overlay.launch(json.jobId);
+      loadJobs();
+    } catch (err) {
+      toast(err.message, true);
+    }
+    return;
+  }
+
+  if (act === 'delete') {
+    const ok = await askConfirm({
+      icon: UI_ICONS.trash,
+      title: job.status === 'draft' ? 'Draft delete ചെയ്യണോ?' : 'Scheduled post delete ചെയ്യണോ?',
+      text: `"${titleOf(job)}"-ഉം അതിന്റെ video-യും ഒഴിവാക്കും. ഇതുവരെ ഒന്നും post ചെയ്തിട്ടില്ല.`,
+    });
+    if (!ok) return;
+    const res = await apiFetch(`/api/jobs/${encodeURIComponent(job.id)}/remove`, { method: 'POST' });
+    if (!res.ok) return toast((await res.json().catch(() => ({}))).error || 'Could not delete', true);
+    allJobs = allJobs.filter((j) => j.id !== job.id);
+    render();
+    toast('Deleted ✓');
+  }
+});
+
+// ---------- editor ----------
+let editing = null;
+function openEditor(job) {
+  editing = job;
+  $('#editTitle').textContent = job.status === 'draft' ? 'Edit draft' : 'Edit scheduled post';
+  $$('#editPlatforms input').forEach((i) => (i.checked = Boolean(job.platforms?.[i.value])));
+  $('#editCaption').value = job.caption || '';
+  $('#editYtTitle').value = job.settings?.ytTitle || '';
+  const mode = job.status === 'scheduled' ? 'schedule' : 'draft';
+  document.querySelector(`input[name=editMode][value=${mode}]`).checked = true;
+  const at = job.scheduledAt ? new Date(job.scheduledAt) : quickTimes()[0][1];
+  $('#editAt').value = toLocalInput(at);
+  $('#editAt').hidden = mode !== 'schedule';
+  $('#editor').hidden = false;
+}
+$$('input[name=editMode]').forEach((r) =>
+  r.addEventListener('change', () => ($('#editAt').hidden = r.value !== 'schedule' || !r.checked)),
+);
+$('#editCancel').addEventListener('click', () => ($('#editor').hidden = true));
+$('#editor').addEventListener('click', (e) => e.target.id === 'editor' && ($('#editor').hidden = true));
+$('#editForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!editing) return;
+  const platforms = $$('#editPlatforms input:checked').map((i) => i.value);
+  if (!platforms.length) return toast('ഒരു platform എങ്കിലും തിരഞ്ഞെടുക്കൂ', true);
+  const mode = document.querySelector('input[name=editMode]:checked').value;
+  const body = {
+    platforms: platforms.join(','),
+    caption: $('#editCaption').value,
+    ytTitle: $('#editYtTitle').value,
+    mode,
+  };
+  if (mode === 'schedule') {
+    const when = new Date($('#editAt').value);
+    if (Number.isNaN(when.getTime()) || when < new Date()) return toast('ഭാവിയിലെ ഒരു സമയം തിരഞ്ഞെടുക്കൂ', true);
+    body.scheduledAt = when.toISOString();
+  }
+  const res = await apiFetch(`/api/jobs/${encodeURIComponent(editing.id)}/edit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) return toast(json.error || 'Could not save', true);
+  const i = allJobs.findIndex((j) => j.id === json.id);
+  if (i >= 0) allJobs[i] = json;
+  $('#editor').hidden = true;
+  render();
+  toast(mode === 'schedule' ? `Scheduled · ${fmtWhen(json.scheduledAt)}` : 'Draft saved ✓');
+});
+
+// ---------- calendar ----------
+let calMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+let calSelected = dayKey(new Date());
+
+function calendarEvents() {
+  const map = new Map();
+  for (const j of allJobs) {
+    if (j.status === 'draft') continue;
+    const iso = j.status === 'scheduled' ? j.scheduledAt : j.postedAt || j.createdAt;
+    if (!iso) continue;
+    const key = dayKey(new Date(iso));
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push({ j, iso, kind: outcome(j) });
+  }
+  for (const list of map.values()) list.sort((a, b) => new Date(a.iso) - new Date(b.iso));
+  return map;
+}
+
+function renderCalendar() {
+  const events = calendarEvents();
+  $('#calTitle').textContent = calMonth.toLocaleDateString([], { month: 'long', year: 'numeric' });
+  const start = new Date(calMonth);
+  start.setDate(1 - start.getDay()); // back to Sunday
+  const todayKey = dayKey(new Date());
+  let html = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => `<div class="dow">${d}</div>`).join('');
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    const key = dayKey(d);
+    const list = events.get(key) || [];
+    const cls = [
+      'cell',
+      d.getMonth() !== calMonth.getMonth() ? 'other' : '',
+      key === todayKey ? 'today' : '',
+      key === calSelected ? 'sel' : '',
+    ].join(' ');
+    html += `<button class="${cls}" data-day="${key}">
+      <span class="n">${d.getDate()}</span>
+      ${list
+        .slice(0, 3)
+        .map((ev) => `<span class="ev"><i class="dotc ${ev.kind}"></i><span>${esc(fmtTime(ev.iso))} ${esc(titleOf(ev.j))}</span></span>`)
+        .join('')}
+      ${list.length > 3 ? `<span class="more">+${list.length - 3} more</span>` : ''}
+    </button>`;
+  }
+  $('#calGrid').innerHTML = html;
+
+  const sel = events.get(calSelected) || [];
+  const [y, m, dd] = calSelected.split('-').map(Number);
+  $('#calDay').innerHTML = `<h4>${esc(dayLabel(new Date(y, m - 1, dd)))}</h4>${
+    sel.length
+      ? sel
+          .map(({ j, kind }) =>
+            j.status === 'scheduled'
+              ? plannedItem(j)
+              : `<div class="post"><span class="pi ${PI_CLASS[Object.keys(j.platforms)[0]] || 'yt'}">${ICONS[Object.keys(j.platforms)[0]] || ''}</span>
+                  <span class="txt"><b>${esc(titleOf(j))}</b><small>${fmtTime(j.postedAt || j.createdAt)} · <span class="st ${kind}">${ST_LABEL[kind]}</span></small></span>
+                  <span class="links">${Object.entries(j.platforms)
+                    .filter(([, s]) => s.url && !s.deleted)
+                    .map(([p, s]) => `<a class="icon-btn" href="${esc(s.url)}" target="_blank" rel="noopener" title="Open on ${NAMES[p]}">${ICONS[p]}</a>`)
+                    .join('')}</span></div>`,
+          )
+          .join('')
+      : '<div class="empty" style="padding:12px">ഈ ദിവസം posts ഇല്ല</div>'
+  }`;
+}
+$('#calGrid').addEventListener('click', (e) => {
+  const cell = e.target.closest('[data-day]');
+  if (!cell) return;
+  calSelected = cell.dataset.day;
+  renderCalendar();
+});
+$('#calPrev').addEventListener('click', () => {
+  calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1);
+  renderCalendar();
+});
+$('#calNext').addEventListener('click', () => {
+  calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1);
+  renderCalendar();
+});
+$('#calToday').addEventListener('click', () => {
+  calMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  calSelected = dayKey(new Date());
+  renderCalendar();
+});
+
+// ---------- ideas ----------
+let ideas = [];
+async function loadIdeas() {
+  try {
+    ideas = await apiFetch('/api/ideas').then((r) => r.json());
+  } catch {
+    return;
+  }
+  renderIdeas();
+}
+function renderIdeas() {
+  $('#ideaList').innerHTML = ideas.length
+    ? ideas
+        .map(
+          (i) => `<div class="idea">
+            <p>${esc(i.text)}</p>
+            <div class="foot2"><small>${timeAgo(i.createdAt)}</small>
+              <button class="btn small" data-use-idea="${esc(i.id)}">✨ Use</button>
+              <button class="icon-btn del" data-del-idea="${esc(i.id)}" title="Delete">${UI_ICONS.trash}</button>
+            </div>
+          </div>`,
+        )
+        .join('')
+    : '<div class="empty"><span class="big">💡</span>ആശയങ്ങൾ ഒന്നുമില്ല. മനസ്സിൽ വരുന്നത് ഇവിടെ എഴുതി വെക്കൂ.</div>';
+}
+$('#ideaForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = $('#ideaText').value.trim();
+  if (!text) return;
+  const res = await apiFetch('/api/ideas', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) return toast(json.error || 'Could not save', true);
+  ideas.unshift(json);
+  $('#ideaText').value = '';
+  renderIdeas();
+  toast('Idea saved 💡');
+});
+$('#ideaList').addEventListener('click', async (e) => {
+  const use = e.target.closest('[data-use-idea]');
+  const del = e.target.closest('[data-del-idea]');
+  if (use) {
+    const idea = ideas.find((i) => i.id === use.dataset.useIdea);
+    caption.value = idea?.text || '';
+    caption.dispatchEvent(new Event('input'));
+    location.hash = '#create';
+    toast('Caption-ൽ ചേർത്തു. ഇനി video തിരഞ്ഞെടുക്കൂ');
+  } else if (del) {
+    const ok = await askConfirm({ icon: '💡', title: 'Idea delete ചെയ്യണോ?', text: 'ഈ ആശയം list-ൽ നിന്ന് മാറ്റും.' });
+    if (!ok) return;
+    await apiFetch(`/api/ideas/${encodeURIComponent(del.dataset.delIdea)}/delete`, { method: 'POST' });
+    ideas = ideas.filter((i) => i.id !== del.dataset.delIdea);
+    renderIdeas();
+  }
+});
+
+// ---------- analytics ----------
+const num = (n) => (n == null ? '–' : Intl.NumberFormat([], { notation: n >= 10000 ? 'compact' : 'standard' }).format(n));
+async function loadAnalytics(refresh = false) {
+  $('#statTiles').innerHTML = '<div class="skeleton"></div>';
+  let data;
+  try {
+    data = await apiFetch(`/api/analytics${refresh ? '?refresh=1' : ''}`).then((r) => r.json());
+  } catch {
+    return;
+  }
+  if (data.error) {
+    $('#statTiles').innerHTML = `<div class="empty">${esc(data.error)}</div>`;
+    return;
+  }
+  const tile = (p, t) => `<div class="tile">
+    <div class="th"><span class="pi ${PI_CLASS[p]}">${ICONS[p]}</span>${NAMES[p]}<small class="muted" style="margin-left:auto">${t.posts} posts</small></div>
+    <div class="nums"><div><b>${num(p === 'instagram' && !data.instagramViews ? null : t.views)}</b><small>views</small></div><div><b>${num(t.likes)}</b><small>likes</small></div><div><b>${num(t.comments)}</b><small>comments</small></div></div>
+  </div>`;
+  $('#statTiles').innerHTML = tile('youtube', data.totals.youtube) + tile('instagram', data.totals.instagram);
+  const notes = [`Updated ${timeAgo(data.updatedAt)}`];
+  if (!data.instagramViews) notes.push('Instagram views കാണാൻ Instagram "Reconnect" ചെയ്യൂ');
+  notes.push(...data.errors);
+  $('#statsNote').textContent = notes.join(' · ');
+
+  const maxViews = Math.max(1, ...data.rows.map((r) => Math.max(r.youtube?.views || 0, r.instagram?.views || 0)));
+  const line = (p, s) =>
+    s
+      ? `<div class="sline"><span class="pi ${PI_CLASS[p]}">${ICONS[p]}</span>
+          ${s.error ? `<span>${esc(s.error === 'deleted' ? 'Deleted' : s.error)}</span>` : `
+          <span><b>${num(s.views)}</b> views</span><span><b>${num(s.likes)}</b> ♥</span><span><b>${num(s.comments)}</b> 💬</span>
+          <span class="bar-h"><i style="width:${Math.round(((s.views || 0) / maxViews) * 100)}%"></i></span>`}
+          ${s.url ? `<a class="icon-btn" href="${esc(s.url)}" target="_blank" rel="noopener" title="Open">${UI_ICONS.open}</a>` : ''}
+        </div>`
+      : '';
+  $('#statRows').innerHTML = data.rows.length
+    ? data.rows
+        .map((r) => `<div class="srow"><div class="h"><b>${esc(r.title)}</b><small>${timeAgo(r.createdAt)}</small></div>${line('youtube', r.youtube)}${line('instagram', r.instagram)}</div>`)
+        .join('')
+    : '<div class="empty"><span class="big">📊</span>Post ചെയ്തതിന് ശേഷം ഇവിടെ views, likes കാണാം</div>';
+}
+$('#statsRefresh').addEventListener('click', () => loadAnalytics(true));
+
+// ---------- timer (cron-job.org) setup ----------
+let cronLoaded = false;
+async function loadCronInfo() {
+  if (cronLoaded) return;
+  cronLoaded = true;
+  const info = await apiFetch('/api/cron-info').then((r) => r.json()).catch(() => ({}));
+  $('#cronUrl').value = info.url || '';
+}
+$('#copyCron').addEventListener('click', async () => {
+  await navigator.clipboard.writeText($('#cronUrl').value).catch(() => $('#cronUrl').select());
+  toast('Link copy ചെയ്തു ✓');
+});
+
+// ---------- navigation ----------
+const VIEW_NAMES = ['create', 'queue', 'calendar', 'posted', 'ideas', 'analytics'];
+function showView(name) {
+  if (!VIEW_NAMES.includes(name)) name = 'create';
+  $$('.view').forEach((v) => (v.hidden = v.dataset.view !== name));
+  $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === name));
+  if (name === 'calendar') renderCalendar();
+  if (name === 'ideas') loadIdeas();
+  if (name === 'analytics') loadAnalytics();
+  if (name === 'queue') loadCronInfo();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+window.addEventListener('hashchange', () => showView(location.hash.slice(1)));
+showView(location.hash.slice(1));
 
 loadStatus().catch(() => {});
 loadJobs();

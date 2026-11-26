@@ -240,6 +240,23 @@ export function removeJob(id) {
   });
 }
 
+// ---------- ideas (text notes for future posts) ----------
+
+const IDEAS = 'ideas.json';
+
+export async function listIdeas() {
+  return (await cachedRead(IDEAS, 3_000)) || [];
+}
+
+export function changeIdeas(fn) {
+  return queued(IDEAS, async () => {
+    const ideas = (await backend.read(IDEAS)) || [];
+    const result = fn(ideas);
+    await writeAndCache(IDEAS, ideas.slice(0, 500));
+    return result;
+  });
+}
+
 // Locally, anything still "running" when the server restarted can never finish.
 if (!useBlob) {
   changeHistory((history) => {

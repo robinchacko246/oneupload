@@ -12,6 +12,8 @@ const SCOPES = [
   'instagram_content_publish',
   // Needed to delete Instagram posts from the app.
   'instagram_manage_contents',
+  // Needed for view counts in Analytics.
+  'instagram_manage_insights',
 ];
 
 const GRAPH = () => `https://graph.facebook.com/${config.meta.version}`;

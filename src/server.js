@@ -9,6 +9,7 @@ import { del as blobDel, get as blobGet, issueSignedToken, presignUrl } from '@v
 import { handleUpload } from '@vercel/blob/client';
 import { waitUntil } from '@vercel/functions';
 import { config } from './config.js';
+import { getAnalytics } from './analytics.js';
 import {
   blobAccess,
   createJob,
@@ -19,6 +20,8 @@ import {
   removeJob,
   updateJob,
   useBlob,
+  listIdeas,
+  changeIdeas,
   withBlobAccess,
 } from './store.js';
 import {
@@ -139,7 +142,7 @@ app.post('/api/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-const OPEN_PATHS = new Set(['/login', '/login.html', '/login.js', '/style.css', '/favicon.svg']);
+const OPEN_PATHS = new Set(['/login', '/login.html', '/login.js', '/style.css', '/favicon.svg', '/api/cron', '/privacy.html']);
 
 app.use((req, res, next) => {
   if (!config.appPassword || OPEN_PATHS.has(req.path) || hasSession(req) || hasBasicAuth(req)) return next();
@@ -234,6 +237,8 @@ app.post('/api/meta/page', async (req, res) => {
 app.get(
   '/api/status',
   asyncRoute(async (req, res) => {
+    // Backup for the timer: opening the app also posts anything that is due.
+    waitUntil(runDuePosts().catch((err) => console.error('[schedule]', err)));
     const accounts = await getAccounts();
     const { youtube, meta } = accounts;
     const page = pageFromAccounts(accounts);
@@ -314,32 +319,105 @@ function readFields(b) {
     type: b.type === 'video' ? 'video' : 'reel',
     caption,
     ytTitle: String(b.ytTitle || '').trim(),
-    ytDescription: String(b.ytDescription || '').trim() || caption,
-    tags: String(b.tags || '')
-      .split(',')
-      .map((t) => t.trim().replace(/^#/, ''))
+    // Empty = use the caption (worked out when posting, so edits to the caption carry over).
+    ytDescription: String(b.ytDescription || '').trim(),
+    tags: (Array.isArray(b.tags) ? b.tags : String(b.tags || '').split(','))
+      .map((t) => String(t).trim().replace(/^#/, ''))
       .filter(Boolean),
     privacy: ['public', 'unlisted', 'private'].includes(b.privacy) ? b.privacy : 'public',
+    // "now" = post right away, "schedule" = post at scheduledAt, "draft" = keep for later.
+    mode: ['schedule', 'draft'].includes(b.mode) ? b.mode : 'now',
+    scheduledAt: b.scheduledAt ? new Date(b.scheduledAt) : null,
+  };
+}
+
+const PLATFORM_LABEL = { scheduled: 'Scheduled', draft: 'Draft' };
+
+function checkScheduleTime(fields) {
+  if (fields.mode !== 'schedule') return null;
+  if (!fields.scheduledAt || Number.isNaN(fields.scheduledAt.getTime())) return 'Choose a date and time';
+  if (fields.scheduledAt.getTime() < Date.now() - 60_000) return 'That time is in the past';
+  return null;
+}
+
+// What runJob needs, built from a stored job (used for scheduled posts, drafts and retries).
+function inputFromJob(job) {
+  const i = job.input || {};
+  return {
+    caption: job.caption || '',
+    ytTitle: i.ytTitle || (job.caption || '').split('\n')[0].slice(0, 100) || job.fileName,
+    ytDescription: i.ytDescription || '',
+    tags: i.tags || [],
+    privacy: i.privacy || 'public',
   };
 }
 
 async function startJob(res, fields, source, fileName) {
-  const title = fields.ytTitle || fields.caption.split('\n')[0].slice(0, 100) || fileName;
+  const later = fields.mode !== 'now';
   const job = {
     id: crypto.randomBytes(8).toString('hex'),
     createdAt: new Date().toISOString(),
     fileName,
     type: fields.type,
     caption: fields.caption,
-    // Kept so a failed platform can be retried later with the same settings.
-    input: { ytTitle: title, ytDescription: fields.ytDescription, tags: fields.tags, privacy: fields.privacy },
-    platforms: Object.fromEntries(fields.platforms.map((p) => [p, { state: 'pending', message: 'Waiting' }])),
+    status: later ? (fields.mode === 'schedule' ? 'scheduled' : 'draft') : 'posting',
+    scheduledAt: fields.mode === 'schedule' ? fields.scheduledAt.toISOString() : null,
+    // Kept so the post can run later / be retried with the same settings.
+    input: { ytTitle: fields.ytTitle, ytDescription: fields.ytDescription, tags: fields.tags, privacy: fields.privacy },
+    platforms: Object.fromEntries(
+      fields.platforms.map((p) => [
+        p,
+        later ? { state: stateFor(fields.mode), message: PLATFORM_LABEL[stateFor(fields.mode)] } : { state: 'pending', message: 'Waiting' },
+      ]),
+    ),
   };
+  if (later) job.mediaSource = source; // the video waits in storage until it is posted
   await createJob(job);
+  if (later) return res.json(publicJob(job));
   liveJobs.set(job.id, job);
   res.json({ jobId: job.id });
   // waitUntil keeps the work going on Vercel after the reply has been sent.
-  waitUntil(runJob(job, { ...fields, ytTitle: title }, source));
+  waitUntil(runJob(job, inputFromJob(job), source));
+}
+
+function stateFor(mode) {
+  return mode === 'schedule' ? 'scheduled' : 'draft';
+}
+
+// Start posting a draft or scheduled post now (the posting itself continues in the background).
+async function publishStored(job) {
+  if (!job.mediaSource) throw new Error('This post has no video');
+  for (const p of Object.keys(job.platforms)) job.platforms[p] = { state: 'pending', message: 'Waiting' };
+  job.status = 'posting';
+  job.claimedAt = new Date().toISOString();
+  await updateJob(job.id, (stored) => {
+    stored.platforms = job.platforms;
+    stored.status = 'posting';
+    stored.claimedAt = job.claimedAt;
+  });
+  liveJobs.set(job.id, job);
+  waitUntil(runJob(job, inputFromJob(job), job.mediaSource));
+}
+
+// Posts whose time has come. Called by the timer (cron-job.org) and when the app is opened.
+async function runDuePosts() {
+  const now = Date.now();
+  const due = (await listJobs()).filter(
+    (j) =>
+      j.status === 'scheduled' &&
+      j.scheduledAt &&
+      new Date(j.scheduledAt).getTime() <= now &&
+      !liveJobs.has(j.id) &&
+      !(j.claimedAt && now - new Date(j.claimedAt).getTime() < 15 * 60 * 1000),
+  );
+  for (const job of due) {
+    await publishStored(job).catch((err) => console.error('[schedule]', err));
+  }
+  return due.length;
+}
+
+function cronKey() {
+  return crypto.createHmac('sha256', config.mediaSecret).update('oneupload-cron').digest('hex').slice(0, 32);
 }
 
 // A short-lived signed link to a private Blob video, so Instagram can download it itself.
@@ -359,6 +437,8 @@ app.post('/api/upload', (req, res) => {
     const fields = readFields(b);
     if (!useBlob) return res.status(400).json({ error: 'Blob uploads are not enabled' });
     if (!fields.platforms.length) return res.status(400).json({ error: 'Choose at least one platform' });
+    const timeError = checkScheduleTime(fields);
+    if (timeError) return res.status(400).json({ error: timeError });
     let host = '';
     try {
       host = new URL(String(b.blobUrl)).hostname;
@@ -378,9 +458,10 @@ app.post('/api/upload', (req, res) => {
     }
     if (!req.file) return res.status(400).json({ error: 'No video received' });
     const fields = readFields(req.body);
-    if (!fields.platforms.length) {
+    const problem = !fields.platforms.length ? 'Choose at least one platform' : checkScheduleTime(fields);
+    if (problem) {
       fs.rmSync(req.file.path, { force: true });
-      return res.status(400).json({ error: 'Choose at least one platform' });
+      return res.status(400).json({ error: problem });
     }
     startJob(res, fields, { kind: 'file', path: req.file.path, name: req.file.filename }, req.file.originalname).catch(
       (e) => res.status(500).json({ error: e.message }),
@@ -438,7 +519,7 @@ async function runJob(job, input, source, only = null) {
           {
             filePath,
             title: input.ytTitle,
-            description: input.ytDescription,
+            description: input.ytDescription || input.caption,
             tags: input.tags,
             privacy: input.privacy,
             isShort,
@@ -498,9 +579,14 @@ async function runJob(job, input, source, only = null) {
     const failed = Object.values(job.platforms).some((p) => p.state === 'error');
     await updateJob(job.id, (stored) => {
       stored.platforms = { ...stored.platforms, ...job.platforms };
+      stored.status = 'posted';
+      stored.postedAt = new Date().toISOString();
+      delete stored.mediaSource;
+      delete stored.claimedAt;
       if (failed) stored.retrySource = { ...source, keptAt: new Date().toISOString() };
       else delete stored.retrySource;
     }).catch((err) => console.error('Could not save job', err));
+    job.status = 'posted';
     liveJobs.delete(job.id);
     if (tempFile) fs.rmSync(tempFile, { force: true });
     if (!failed) await deleteSourceVideo(source);
@@ -515,9 +601,16 @@ async function deleteSourceVideo(source) {
 
 // What the browser may see of a job (no internal storage links).
 function publicJob(j) {
-  const { retrySource, input, ...rest } = j;
+  const { retrySource, mediaSource, input, ...rest } = j;
   const keptMs = retrySource ? Date.now() - new Date(retrySource.keptAt).getTime() : Infinity;
-  return { ...rest, canRetry: keptMs < 24 * 60 * 60 * 1000 };
+  return {
+    ...rest,
+    status: j.status || 'posted', // uploads from before scheduling existed
+    hasVideo: Boolean(mediaSource),
+    // Settings the edit form needs (no storage links).
+    settings: { ytTitle: input?.ytTitle || '', ytDescription: input?.ytDescription || '', tags: input?.tags || [], privacy: input?.privacy || 'public' },
+    canRetry: keptMs < 24 * 60 * 60 * 1000,
+  };
 }
 
 app.get(
@@ -555,8 +648,7 @@ app.post(
     });
     liveJobs.set(job.id, job);
     res.json(publicJob(job));
-    const input = { ...(job.input || {}), caption: job.caption };
-    waitUntil(runJob(job, input, job.retrySource, [platform]));
+    waitUntil(runJob(job, inputFromJob(job), job.retrySource, [platform]));
   }),
 );
 
@@ -607,7 +699,118 @@ app.post(
     if (liveJobs.has(req.params.id)) return res.status(400).json({ error: 'Upload is still running' });
     const job = await getJob(req.params.id);
     await deleteSourceVideo(job?.retrySource);
+    await deleteSourceVideo(job?.mediaSource); // a draft / scheduled post's waiting video
     res.json({ ok: await removeJob(req.params.id) });
+  }),
+);
+
+// ---------- drafts & scheduled posts ----------
+
+// Change a draft or scheduled post (caption, time, platforms, YouTube settings), or move
+// it between draft and scheduled.
+app.post(
+  '/api/jobs/:id/edit',
+  asyncRoute(async (req, res) => {
+    const job = await getJob(req.params.id);
+    if (!job || !['draft', 'scheduled'].includes(job.status)) return res.status(400).json({ error: 'Only drafts and scheduled posts can be edited' });
+    const b = req.body || {};
+    const fields = readFields({
+      platforms: b.platforms ?? Object.keys(job.platforms).join(','),
+      type: b.type ?? job.type,
+      caption: b.caption ?? job.caption,
+      ytTitle: b.ytTitle ?? job.input?.ytTitle,
+      ytDescription: b.ytDescription ?? job.input?.ytDescription,
+      tags: b.tags ?? job.input?.tags,
+      privacy: b.privacy ?? job.input?.privacy,
+      mode: b.mode ?? (job.status === 'scheduled' ? 'schedule' : 'draft'),
+      scheduledAt: b.scheduledAt ?? job.scheduledAt,
+    });
+    if (!fields.platforms.length) return res.status(400).json({ error: 'Choose at least one platform' });
+    if (fields.mode === 'now') fields.mode = 'draft';
+    const timeError = checkScheduleTime(fields);
+    if (timeError) return res.status(400).json({ error: timeError });
+    const state = stateFor(fields.mode);
+    const updated = await updateJob(job.id, (stored) => {
+      stored.caption = fields.caption;
+      stored.type = fields.type;
+      stored.status = fields.mode === 'schedule' ? 'scheduled' : 'draft';
+      stored.scheduledAt = fields.mode === 'schedule' ? fields.scheduledAt.toISOString() : null;
+      stored.input = { ytTitle: fields.ytTitle, ytDescription: fields.ytDescription, tags: fields.tags, privacy: fields.privacy };
+      stored.platforms = Object.fromEntries(fields.platforms.map((p) => [p, { state, message: PLATFORM_LABEL[state] }]));
+      delete stored.claimedAt;
+    });
+    res.json(publicJob(updated));
+  }),
+);
+
+// Post a draft or scheduled post right now.
+app.post(
+  '/api/jobs/:id/publish',
+  asyncRoute(async (req, res) => {
+    const job = await getJob(req.params.id);
+    if (!job || !['draft', 'scheduled'].includes(job.status)) return res.status(400).json({ error: 'Nothing to post' });
+    if (liveJobs.has(job.id)) return res.status(400).json({ error: 'Already posting' });
+    await publishStored(job);
+    res.json({ jobId: job.id });
+  }),
+);
+
+// The timer. cron-job.org calls this every few minutes: GET /api/cron?key=...
+app.all('/api/cron', async (req, res) => {
+  const key = String(req.query.key || '');
+  const expected = cronKey();
+  if (key.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(key), Buffer.from(expected))) {
+    return res.status(403).json({ error: 'Bad key' });
+  }
+  try {
+    const started = await runDuePosts();
+    res.json({ ok: true, started });
+  } catch (err) {
+    console.error('[cron]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The timer link to paste into cron-job.org (only shown to the logged-in owner).
+app.get('/api/cron-info', (req, res) => {
+  res.json({ url: `${config.baseUrl}/api/cron?key=${cronKey()}` });
+});
+
+// ---------- ideas ----------
+
+app.get(
+  '/api/ideas',
+  asyncRoute(async (req, res) => res.json(await listIdeas())),
+);
+
+app.post(
+  '/api/ideas',
+  asyncRoute(async (req, res) => {
+    const text = String(req.body?.text || '').trim().slice(0, 2200);
+    if (!text) return res.status(400).json({ error: 'Write something first' });
+    const idea = { id: crypto.randomBytes(6).toString('hex'), text, createdAt: new Date().toISOString() };
+    await changeIdeas((ideas) => ideas.unshift(idea));
+    res.json(idea);
+  }),
+);
+
+app.post(
+  '/api/ideas/:id/delete',
+  asyncRoute(async (req, res) => {
+    await changeIdeas((ideas) => {
+      const i = ideas.findIndex((x) => x.id === req.params.id);
+      if (i >= 0) ideas.splice(i, 1);
+    });
+    res.json({ ok: true });
+  }),
+);
+
+// ---------- analytics ----------
+
+app.get(
+  '/api/analytics',
+  asyncRoute(async (req, res) => {
+    res.json(await getAnalytics(await listJobs(), req.query.refresh === '1'));
   }),
 );
 
