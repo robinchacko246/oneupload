@@ -110,6 +110,12 @@ main.app {
 @media (max-width: 860px) { main.app { grid-template-columns: minmax(0, 1fr); } }
 .job-head b { min-width: 0; }
 .col > .card { min-width: 0; }
+/* Long captions must not push cards wider than their column. */
+.jobs > *, .job-head, .prow, .post { min-width: 0; max-width: 100%; }
+.job-head b { flex: 1; }
+.prow .msg.error { overflow-wrap: anywhere; }
+.btn.retry { padding: 5px 10px; font-size: 12px; color: var(--run); border-color: rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.08); }
+.btn.retry:hover { background: rgba(251, 191, 36, 0.16); }
 .col { display: grid; gap: 20px; min-width: 0; }
 
 .card {

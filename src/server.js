@@ -5,11 +5,12 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import express from 'express';
 import multer from 'multer';
-import { del as blobDel, get as blobGet } from '@vercel/blob';
+import { del as blobDel, get as blobGet, issueSignedToken, presignUrl } from '@vercel/blob';
 import { handleUpload } from '@vercel/blob/client';
 import { waitUntil } from '@vercel/functions';
 import { config } from './config.js';
 import {
+  blobAccess,
   createJob,
   getAccounts,
   getJob,
@@ -323,20 +324,32 @@ function readFields(b) {
 }
 
 async function startJob(res, fields, source, fileName) {
+  const title = fields.ytTitle || fields.caption.split('\n')[0].slice(0, 100) || fileName;
   const job = {
     id: crypto.randomBytes(8).toString('hex'),
     createdAt: new Date().toISOString(),
     fileName,
     type: fields.type,
     caption: fields.caption,
+    // Kept so a failed platform can be retried later with the same settings.
+    input: { ytTitle: title, ytDescription: fields.ytDescription, tags: fields.tags, privacy: fields.privacy },
     platforms: Object.fromEntries(fields.platforms.map((p) => [p, { state: 'pending', message: 'Waiting' }])),
   };
   await createJob(job);
   liveJobs.set(job.id, job);
   res.json({ jobId: job.id });
-  const title = fields.ytTitle || fields.caption.split('\n')[0].slice(0, 100) || fileName;
   // waitUntil keeps the work going on Vercel after the reply has been sent.
   waitUntil(runJob(job, { ...fields, ytTitle: title }, source));
+}
+
+// A short-lived signed link to a private Blob video, so Instagram can download it itself.
+async function signedBlobUrl(url) {
+  if (blobAccess === 'public') return url;
+  const pathname = decodeURIComponent(new URL(url).pathname.replace(/^\//, ''));
+  const validUntil = Date.now() + 2 * 60 * 60 * 1000;
+  const token = await issueSignedToken({ pathname, operations: ['get'], validUntil });
+  const { presignedUrl } = await presignUrl(token, { operation: 'get', pathname, access: 'private', validUntil });
+  return presignedUrl;
 }
 
 app.post('/api/upload', (req, res) => {
@@ -386,7 +399,8 @@ async function downloadBlob(url, dest) {
 // (started / posted / failed) are written to storage, to keep storage operations low.
 const liveJobs = new Map();
 
-async function runJob(job, input, source) {
+// `only` limits the run to some platforms (used by Retry).
+async function runJob(job, input, source, only = null) {
   const isShort = job.type === 'reel';
 
   const update = (platform, patch, save = false) => {
@@ -397,16 +411,25 @@ async function runJob(job, input, source) {
       stored.platforms[platform] = { ...stored.platforms[platform], ...snapshot };
     }).catch((err) => console.error('Could not save job', err));
   };
-  const platforms = Object.keys(job.platforms);
+  const platforms = only || Object.keys(job.platforms);
 
   let filePath = source.path;
   let tempFile = null;
+  let igVideoUrl = null;
   try {
     if (source.kind === 'blob') {
       platforms.forEach((p) => update(p, { message: 'Preparing video' }));
       tempFile = path.join(config.paths.uploads, `${job.id}${path.extname(job.fileName) || '.mp4'}`);
       await downloadBlob(source.url, tempFile);
       filePath = tempFile;
+      if (platforms.includes('instagram')) {
+        igVideoUrl = await signedBlobUrl(source.url).catch((err) => {
+          console.error('[instagram] could not make a signed link', err.message);
+          return null;
+        });
+      }
+    } else if (config.baseUrl.startsWith('https://')) {
+      igVideoUrl = publicMediaUrl(source.name);
     }
 
     const tasks = {
@@ -431,7 +454,7 @@ async function runJob(job, input, source) {
           {
             filePath,
             caption: input.caption,
-            publicVideoUrl: source.kind === 'file' ? publicMediaUrl(source.name) : null,
+            publicVideoUrl: igVideoUrl,
           },
           (msg) => update('instagram', { message: msg }),
         ),
@@ -471,14 +494,30 @@ async function runJob(job, input, source) {
       if (job.platforms[p].state !== 'done') update(p, { state: 'error', message: err.message }, true);
     });
   } finally {
-    // Final save with everything, then clean up.
+    // If something failed, keep the video for a while so that platform can be retried.
+    const failed = Object.values(job.platforms).some((p) => p.state === 'error');
     await updateJob(job.id, (stored) => {
       stored.platforms = { ...stored.platforms, ...job.platforms };
+      if (failed) stored.retrySource = { ...source, keptAt: new Date().toISOString() };
+      else delete stored.retrySource;
     }).catch((err) => console.error('Could not save job', err));
     liveJobs.delete(job.id);
     if (tempFile) fs.rmSync(tempFile, { force: true });
-    if (source.kind === 'blob') await blobDel(source.url).catch(() => {});
+    if (!failed) await deleteSourceVideo(source);
   }
+}
+
+async function deleteSourceVideo(source) {
+  if (!source) return;
+  if (source.kind === 'blob') await blobDel(source.url).catch(() => {});
+  if (source.kind === 'file' && source.path) fs.rmSync(source.path, { force: true });
+}
+
+// What the browser may see of a job (no internal storage links).
+function publicJob(j) {
+  const { retrySource, input, ...rest } = j;
+  const keptMs = retrySource ? Date.now() - new Date(retrySource.keptAt).getTime() : Infinity;
+  return { ...rest, canRetry: keptMs < 24 * 60 * 60 * 1000 };
 }
 
 app.get(
@@ -486,7 +525,7 @@ app.get(
   asyncRoute(async (req, res) => {
     const jobs = await listJobs();
     // Show live progress for jobs running on this instance.
-    res.json(jobs.map((j) => liveJobs.get(j.id) || j));
+    res.json(jobs.map((j) => publicJob(liveJobs.get(j.id) || j)));
   }),
 );
 
@@ -495,7 +534,29 @@ app.get(
   asyncRoute(async (req, res) => {
     const job = liveJobs.get(req.params.id) || (await getJob(req.params.id));
     if (!job) return res.status(404).json({ error: 'Not found' });
-    res.json(job);
+    res.json(publicJob(job));
+  }),
+);
+
+// Try a failed platform again with the same video (kept for 24 hours after a failure).
+app.post(
+  '/api/jobs/:id/retry',
+  asyncRoute(async (req, res) => {
+    const platform = String(req.body?.platform || '');
+    const job = await getJob(req.params.id);
+    if (!job || job.platforms?.[platform]?.state !== 'error') return res.status(400).json({ error: 'Nothing to retry' });
+    if (liveJobs.has(job.id)) return res.status(400).json({ error: 'Upload is still running' });
+    if (!publicJob(job).canRetry) {
+      return res.status(400).json({ error: 'Video ഇനി ലഭ്യമല്ല. Video വീണ്ടും upload ചെയ്യൂ (ഈ platform മാത്രം tick ചെയ്ത്).' });
+    }
+    job.platforms[platform] = { state: 'pending', message: 'Retrying' };
+    await updateJob(job.id, (stored) => {
+      stored.platforms[platform] = job.platforms[platform];
+    });
+    liveJobs.set(job.id, job);
+    res.json(publicJob(job));
+    const input = { ...(job.input || {}), caption: job.caption };
+    waitUntil(runJob(job, input, job.retrySource, [platform]));
   }),
 );
 
@@ -544,6 +605,8 @@ app.post(
   '/api/jobs/:id/remove',
   asyncRoute(async (req, res) => {
     if (liveJobs.has(req.params.id)) return res.status(400).json({ error: 'Upload is still running' });
+    const job = await getJob(req.params.id);
+    await deleteSourceVideo(job?.retrySource);
     res.json({ ok: await removeJob(req.params.id) });
   }),
 );

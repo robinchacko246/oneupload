@@ -31,9 +31,10 @@ async function readGraphResponse(res) {
   } catch {
     data = { raw: text };
   }
-  if (!res.ok || data.error) {
+  if (!res.ok || data.error || data.debug_info) {
     const e = data.error || {};
-    const msg = e.error_user_msg || e.message || data.debug_info?.message || text || `HTTP ${res.status}`;
+    let msg = e.error_user_msg || e.message || data.debug_info?.message || text || `HTTP ${res.status}`;
+    if (data.debug_info?.type) msg += ` (${data.debug_info.type})`;
     throw new Error(`Meta API: ${msg}`);
   }
   return data;
@@ -266,32 +267,54 @@ export async function uploadToInstagram({ filePath, caption, publicVideoUrl, sha
     access_token: token,
   };
 
-  let container;
-  if (config.igUploadMode === 'url') {
-    if (!publicVideoUrl?.startsWith('https://')) {
-      throw new Error('IG_UPLOAD_MODE=url needs PUBLIC_BASE_URL to be a public https address');
-    }
-    onStatus?.('Instagram is downloading the video');
-    container = await graphPost(`/${page.ig.id}/media`, { ...params, video_url: publicVideoUrl });
-  } else {
-    onStatus?.('Uploading video to Instagram');
-    container = await graphPost(`/${page.ig.id}/media`, { ...params, upload_type: 'resumable' });
-    const uploadUrl = container.uri || `https://rupload.facebook.com/ig-api-upload/${config.meta.version}/${container.id}`;
-    await ruploadFile(uploadUrl, token, filePath);
+  // Two ways to hand Instagram the video:
+  //  - "url": Instagram downloads it from a public https link (most reliable when we have one)
+  //  - "resumable": we send the bytes to Meta's upload server ourselves
+  // We try them in order and fall back to the other one if Instagram refuses.
+  const hasUrl = Boolean(publicVideoUrl?.startsWith('https://'));
+  const modes = hasUrl ? ['url', 'resumable'] : ['resumable'];
+  if (config.igUploadMode === 'url' && !hasUrl) {
+    throw new Error('IG_UPLOAD_MODE=url needs PUBLIC_BASE_URL to be a public https address');
   }
 
-  // Instagram processes the video before it can be published (can take a few minutes).
-  onStatus?.('Instagram is processing the video');
-  const deadline = Date.now() + 20 * 60 * 1000;
-  while (true) {
-    const s = await graphGet(`/${container.id}`, { fields: 'status_code,status', access_token: token });
-    if (s.status_code === 'FINISHED') break;
-    if (s.status_code === 'ERROR' || s.status_code === 'EXPIRED') {
-      throw new Error(`Instagram could not process the video: ${s.status || s.status_code}`);
+  async function createAndProcess(mode) {
+    let container;
+    if (mode === 'url') {
+      onStatus?.('Instagram is downloading the video');
+      container = await graphPost(`/${page.ig.id}/media`, { ...params, video_url: publicVideoUrl });
+    } else {
+      onStatus?.('Uploading video to Instagram');
+      container = await graphPost(`/${page.ig.id}/media`, { ...params, upload_type: 'resumable' });
+      const uploadUrl = container.uri || `https://rupload.facebook.com/ig-api-upload/${config.meta.version}/${container.id}`;
+      await ruploadFile(uploadUrl, token, filePath);
     }
-    if (Date.now() > deadline) throw new Error('Instagram took too long to process the video');
-    await sleep(5000);
+
+    // Instagram processes the video before it can be published (can take a few minutes).
+    onStatus?.('Instagram is processing the video');
+    const deadline = Date.now() + 20 * 60 * 1000;
+    while (true) {
+      const s = await graphGet(`/${container.id}`, { fields: 'status_code,status', access_token: token });
+      if (s.status_code === 'FINISHED') return container;
+      if (s.status_code === 'ERROR' || s.status_code === 'EXPIRED') {
+        throw new Error(`Instagram could not process the video: ${s.status || s.status_code}`);
+      }
+      if (Date.now() > deadline) throw new Error('Instagram took too long to process the video');
+      await sleep(5000);
+    }
   }
+
+  let container;
+  let lastError;
+  for (const mode of modes) {
+    try {
+      container = await createAndProcess(mode);
+      break;
+    } catch (err) {
+      console.error(`[instagram] ${mode} upload failed:`, err.message);
+      lastError = err;
+    }
+  }
+  if (!container) throw lastError;
 
   onStatus?.('Publishing on Instagram');
   const published = await graphPost(`/${page.ig.id}/media_publish`, {

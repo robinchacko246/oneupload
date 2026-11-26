@@ -423,6 +423,8 @@ const UI_ICONS = {
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg>',
   open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
   remove: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  retry:
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.2L3 16M3 21v-5h5"/></svg>',
 };
 
 let allJobs = [];
@@ -475,7 +477,11 @@ function rowLinks(j, p, s) {
     s.state === 'done' && !s.deleted
       ? `<button class="icon-btn del" data-del="${esc(j.id)}" data-platform="${p}" title="Delete from ${NAMES[p]}">${UI_ICONS.trash}</button>`
       : '';
-  return `<span class="links">${open}${del}</span>`;
+  const retry =
+    s.state === 'error' && j.canRetry
+      ? `<button class="btn small retry" data-retry="${esc(j.id)}" data-platform="${p}">${UI_ICONS.retry} Retry</button>`
+      : '';
+  return `<span class="links">${retry}${open}${del}</span>`;
 }
 
 function renderAll(jobs) {
@@ -635,7 +641,31 @@ async function takeOffList(btn) {
   }
 }
 
+async function retryPost(btn) {
+  const id = btn.dataset.retry;
+  const p = btn.dataset.platform;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Retrying';
+  try {
+    const res = await apiFetch(`/api/jobs/${encodeURIComponent(id)}/retry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform: p }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || 'Retry failed');
+    toast(`${NAMES[p]} വീണ്ടും ശ്രമിക്കുന്നു…`);
+    loadJobs();
+  } catch (err) {
+    btn.disabled = false;
+    btn.innerHTML = `${UI_ICONS.retry} Retry`;
+    toast(err.message, true);
+  }
+}
+
 $('#jobs').addEventListener('click', (e) => {
+  const retryBtn = e.target.closest('[data-retry]');
+  if (retryBtn) return retryPost(retryBtn);
   const delBtn = e.target.closest('[data-del]');
   if (delBtn) return deletePost(delBtn);
   const listBtn = e.target.closest('[data-remove]');
