@@ -45,7 +45,7 @@ async function loadStatus() {
   if (!s.meta.configured) {
     meta.innerHTML = `<span class="muted">.env-ൽ META_APP_ID, META_APP_SECRET ചേർക്കണം (SETUP-ML.md നോക്കൂ)</span>`;
   } else if (!s.meta.connected) {
-    meta.innerHTML = `<a class="btn" href="/auth/facebook">Connect Facebook + Instagram</a>`;
+    meta.innerHTML = `<a class="btn" href="/auth/facebook">Connect Instagram (Facebook login)</a>`;
   } else {
     const options = s.meta.pages
       .map((p) => `<option value="${esc(p.id)}" ${p.id === s.meta.selectedPageId ? 'selected' : ''}>${esc(p.name)}${p.igUsername ? ` (@${esc(p.igUsername)})` : ''}</option>`)
@@ -114,8 +114,25 @@ function showProgress(pct, text) {
   bar.querySelector('span').textContent = text;
 }
 
+// Remember which platforms were ticked last time (per device).
+const PLATFORM_KEY = 'oneupload.platforms';
+function restorePlatforms() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(PLATFORM_KEY)); } catch {}
+  if (!Array.isArray(saved)) return;
+  document.querySelectorAll('input[name=platforms]').forEach((i) => (i.checked = saved.includes(i.value)));
+}
+document.querySelectorAll('input[name=platforms]').forEach((i) =>
+  i.addEventListener('change', () => {
+    const ticked = [...document.querySelectorAll('input[name=platforms]:checked')].map((x) => x.value);
+    localStorage.setItem(PLATFORM_KEY, JSON.stringify(ticked));
+  }),
+);
+restorePlatforms();
+
 function resetForm(form) {
   form.reset();
+  restorePlatforms();
   preview.hidden = true;
   preview.removeAttribute('src');
   $('#dropText').textContent = 'Video തിരഞ്ഞെടുക്കൂ (അല്ലെങ്കിൽ ഇവിടെ drag ചെയ്യൂ)';
