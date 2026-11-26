@@ -287,8 +287,13 @@ function cleanupUploads() {
 setInterval(cleanupUploads, 60 * 60 * 1000).unref();
 cleanupUploads();
 
-app.listen(config.port, () => {
-  console.log(`Uploader running at http://localhost:${config.port}`);
-  console.log(`Public address: ${config.baseUrl}`);
-  if (!config.appPassword) console.log('WARNING: APP_PASSWORD is empty, the page has no password.');
-});
+// On Vercel the app is exported and Vercel runs it; locally we start our own server.
+if (!config.onVercel) {
+  app.listen(config.port, () => {
+    console.log(`Uploader running at http://localhost:${config.port}`);
+    console.log(`Public address: ${config.baseUrl}`);
+    if (!config.appPassword) console.log('WARNING: APP_PASSWORD is empty, the page has no password.');
+  });
+}
+
+export default app;
