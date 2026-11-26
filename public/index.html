@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>One Upload → YouTube · Instagram · Facebook</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>One Upload</h1>
+    <p class="sub">ഒരു തവണ അപ്‌ലോഡ് ചെയ്യൂ, മൂന്നിടത്തും പോസ്റ്റ് ആവും</p>
+  </header>
+
+  <main>
+    <div id="banner" class="banner" hidden></div>
+
+    <section class="card">
+      <h2>Accounts <span class="ml">അക്കൗണ്ടുകൾ</span></h2>
+      <div class="accounts">
+        <div class="account" id="acc-youtube">
+          <div class="acc-head"><span class="dot yt"></span>YouTube</div>
+          <div class="acc-body">Loading…</div>
+        </div>
+        <div class="account" id="acc-meta">
+          <div class="acc-head"><span class="dot fb"></span>Facebook + <span class="dot ig"></span>Instagram</div>
+          <div class="acc-body">Loading…</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>New post <span class="ml">പുതിയ പോസ്റ്റ്</span></h2>
+      <form id="form">
+        <label class="drop" id="drop">
+          <input type="file" name="video" id="video" accept="video/*" required />
+          <span id="dropText">Video തിരഞ്ഞെടുക്കൂ (അല്ലെങ്കിൽ ഇവിടെ drag ചെയ്യൂ)</span>
+          <video id="preview" muted playsinline controls hidden></video>
+        </label>
+
+        <div class="row">
+          <span class="label">Type</span>
+          <label class="pill"><input type="radio" name="type" value="reel" checked /> Reel / Short (vertical, ≤ 90s)</label>
+          <label class="pill"><input type="radio" name="type" value="video" /> Long video</label>
+        </div>
+
+        <div class="row">
+          <span class="label">Post to</span>
+          <label class="pill"><input type="checkbox" name="platforms" value="youtube" checked /> YouTube</label>
+          <label class="pill"><input type="checkbox" name="platforms" value="instagram" checked /> Instagram</label>
+          <label class="pill"><input type="checkbox" name="platforms" value="facebook" checked /> Facebook</label>
+        </div>
+
+        <label class="field">
+          <span>Caption <small>(Instagram, Facebook — YouTube description-ഉം ഇതുതന്നെ, താഴെ മാറ്റിയില്ലെങ്കിൽ)</small></span>
+          <textarea name="caption" rows="5" maxlength="2200" placeholder="Caption + #hashtags"></textarea>
+          <small class="count" id="capCount">0 / 2200</small>
+        </label>
+
+        <details>
+          <summary>YouTube settings</summary>
+          <label class="field">
+            <span>YouTube title <small>(ഒഴിച്ചിട്ടാൽ caption-ന്റെ ആദ്യ വരി)</small></span>
+            <input name="ytTitle" maxlength="100" />
+          </label>
+          <label class="field">
+            <span>YouTube description <small>(ഒഴിച്ചിട്ടാൽ caption)</small></span>
+            <textarea name="ytDescription" rows="4" maxlength="5000"></textarea>
+          </label>
+          <label class="field">
+            <span>Tags <small>(comma കൊണ്ട് വേർതിരിക്കുക)</small></span>
+            <input name="tags" placeholder="malayalam, vlog, kerala" />
+          </label>
+          <label class="field">
+            <span>Visibility</span>
+            <select name="privacy">
+              <option value="public">Public</option>
+              <option value="unlisted">Unlisted</option>
+              <option value="private">Private</option>
+            </select>
+          </label>
+        </details>
+
+        <button type="submit" id="submit">Upload everywhere 🚀</button>
+        <div class="progress" id="sendProgress" hidden><div></div><span></span></div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>History <span class="ml">മുൻ അപ്‌ലോഡുകൾ</span></h2>
+      <div id="jobs" class="jobs"><p class="muted">ഇതുവരെ ഒന്നുമില്ല</p></div>
+    </section>
+  </main>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
