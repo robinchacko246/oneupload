@@ -4,9 +4,18 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-const baseUrl = (process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/+$/, '');
+// Vercel's project folder is read-only; only /tmp can be written (and it is wiped often).
+const onVercel = Boolean(process.env.VERCEL);
+const writableRoot = onVercel ? '/tmp/oneupload' : root;
+
+const defaultBaseUrl =
+  onVercel && process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : `http://localhost:${process.env.PORT || 3000}`;
+const baseUrl = (process.env.PUBLIC_BASE_URL || defaultBaseUrl).replace(/\/+$/, '');
 
 export const config = {
+  onVercel,
   port: Number(process.env.PORT || 3000),
   baseUrl,
   appPassword: process.env.APP_PASSWORD || '',
@@ -31,7 +40,7 @@ export const config = {
   paths: {
     root,
     public: path.join(root, 'public'),
-    uploads: path.join(root, 'uploads'),
-    data: path.join(root, 'data'),
+    uploads: path.join(writableRoot, 'uploads'),
+    data: path.join(writableRoot, 'data'),
   },
 };
