@@ -173,6 +173,9 @@ const OPEN_PATHS = new Set([
   '/style.css',
   '/favicon.svg',
   '/privacy.html',
+  '/terms.html',
+  '/data-deletion.html',
+  '/app-icon.png',
   '/api/cron',
   '/api/auth-info',
 ]);
