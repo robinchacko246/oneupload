@@ -115,23 +115,33 @@ export async function metaHandleCallback(code) {
     throw new Error('No Facebook Pages found. While logging in, tick your Page (and its Instagram account) when Facebook asks which ones to allow.');
   }
 
-  const previous = getAccounts().meta?.selectedPageId;
-  const selected = pages.find((p) => p.id === previous) || pages.find((p) => p.ig) || pages[0];
-  updateAccounts({
-    meta: { pages, selectedPageId: selected.id, connectedAt: new Date().toISOString() },
+  await updateAccounts((all) => {
+    const previous = all.meta?.selectedPageId;
+    const selected = pages.find((p) => p.id === previous) || pages.find((p) => p.ig) || pages[0];
+    return { meta: { pages, selectedPageId: selected.id, connectedAt: new Date().toISOString() } };
   });
 }
 
-export function selectedPage() {
-  const meta = getAccounts().meta;
+export function pageFromAccounts(accounts) {
+  const meta = accounts.meta;
   if (!meta) return null;
   return meta.pages.find((p) => p.id === meta.selectedPageId) || null;
 }
 
-export function selectPage(pageId) {
-  const meta = getAccounts().meta;
-  if (!meta || !meta.pages.some((p) => p.id === pageId)) throw new Error('Unknown page');
-  updateAccounts({ meta: { ...meta, selectedPageId: pageId } });
+export async function selectedPage() {
+  return pageFromAccounts(await getAccounts());
+}
+
+export async function selectPage(pageId) {
+  let found = true;
+  await updateAccounts((all) => {
+    if (!all.meta || !all.meta.pages.some((p) => p.id === pageId)) {
+      found = false;
+      return {};
+    }
+    return { meta: { ...all.meta, selectedPageId: pageId } };
+  });
+  if (!found) throw new Error('Unknown page');
 }
 
 // ---------------- Facebook ----------------
@@ -166,7 +176,7 @@ async function facebookReel(page, { filePath, description }) {
 }
 
 export async function uploadToFacebook({ filePath, title, description, isShort }, onStatus) {
-  const page = selectedPage();
+  const page = await selectedPage();
   if (!page) throw new Error('Facebook is not connected');
 
   if (!isShort) {
@@ -187,7 +197,7 @@ export async function uploadToFacebook({ filePath, title, description, isShort }
 // ---------------- Instagram ----------------
 
 export async function uploadToInstagram({ filePath, caption, publicVideoUrl, shareToFeed = true }, onStatus) {
-  const page = selectedPage();
+  const page = await selectedPage();
   if (!page) throw new Error('Facebook/Instagram is not connected');
   if (!page.ig) throw new Error(`The Page "${page.name}" has no Instagram Business/Creator account linked`);
 

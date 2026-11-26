@@ -20,9 +20,9 @@ function makeClient() {
   );
   // Google sends a fresh access token from time to time: keep it.
   client.on('tokens', (tokens) => {
-    const current = getAccounts().youtube;
-    if (!current) return;
-    updateAccounts({ youtube: { ...current, tokens: { ...current.tokens, ...tokens } } });
+    updateAccounts((all) =>
+      all.youtube ? { youtube: { ...all.youtube, tokens: { ...all.youtube.tokens, ...tokens } } } : {},
+    ).catch((err) => console.error('Could not save refreshed YouTube token', err));
   });
   return client;
 }
@@ -47,7 +47,7 @@ export async function youtubeHandleCallback(code) {
   const me = await yt.channels.list({ part: ['snippet'], mine: true });
   const channel = me.data.items?.[0];
   if (!channel) throw new Error('This Google account has no YouTube channel.');
-  updateAccounts({
+  await updateAccounts({
     youtube: {
       tokens,
       channelId: channel.id,
@@ -58,7 +58,7 @@ export async function youtubeHandleCallback(code) {
 }
 
 export async function uploadToYouTube({ filePath, title, description, tags, privacy, isShort }, onProgress) {
-  const account = getAccounts().youtube;
+  const account = (await getAccounts()).youtube;
   if (!account) throw new Error('YouTube is not connected');
 
   const client = makeClient();

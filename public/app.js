@@ -19,8 +19,17 @@ if (params.get('connected') || params.get('error')) {
 }
 
 // ---------- accounts ----------
+let status = {};
+
 async function loadStatus() {
   const s = await fetch(api('/api/status')).then((r) => r.json());
+  status = s;
+  if (s.storageWarning) {
+    const banner = $('#banner');
+    banner.hidden = false;
+    banner.classList.add('error');
+    banner.textContent = s.storageWarning;
+  }
 
   const yt = $('#acc-youtube .acc-body');
   if (!s.youtube.configured) {
@@ -98,49 +107,105 @@ const caption = document.querySelector('textarea[name=caption]');
 caption.addEventListener('input', () => ($('#capCount').textContent = `${caption.value.length} / 2200`));
 
 // ---------- submit ----------
-$('#form').addEventListener('submit', (e) => {
+function showProgress(pct, text) {
+  const bar = $('#sendProgress');
+  bar.hidden = false;
+  bar.querySelector('div').style.width = `${pct}%`;
+  bar.querySelector('span').textContent = text;
+}
+
+function resetForm(form) {
+  form.reset();
+  preview.hidden = true;
+  preview.removeAttribute('src');
+  $('#dropText').textContent = 'Video തിരഞ്ഞെടുക്കൂ (അല്ലെങ്കിൽ ഇവിടെ drag ചെയ്യൂ)';
+  $('#capCount').textContent = '0 / 2200';
+}
+
+// Local server: send the video straight to it.
+function sendDirect(data) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', api('/api/upload'));
+    xhr.upload.onprogress = (ev) => {
+      if (!ev.lengthComputable) return;
+      const pct = Math.round((ev.loaded / ev.total) * 100);
+      showProgress(pct, pct < 100 ? `Sending to server ${pct}%` : 'Starting uploads…');
+    };
+    xhr.onload = () => {
+      let res = {};
+      try { res = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status !== 200) reject(new Error(res.error || `Upload failed (${xhr.status})`));
+      else resolve(res);
+    };
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.send(data);
+  });
+}
+
+// Vercel: upload the video to Vercel Blob first (Vercel itself only accepts 4.5 MB per request),
+// then tell the server where it is.
+async function sendViaBlob(file, data) {
+  const { upload } = await import('https://esm.sh/@vercel/blob@2.9.0/client');
+  const safeName = file.name.replace(/[^\w.\-]+/g, '_') || 'video.mp4';
+  const options = {
+    handleUploadUrl: api('/api/blob-upload'),
+    multipart: file.size > 20 * 1024 * 1024,
+    contentType: file.type || 'video/mp4',
+    onUploadProgress: ({ percentage }) =>
+      showProgress(Math.round(percentage), `Uploading video ${Math.round(percentage)}%`),
+  };
+  let blob;
+  try {
+    blob = await upload(`uploads/${safeName}`, file, { ...options, access: 'private' });
+  } catch (err) {
+    if (!/access|private|public/i.test(String(err?.message))) throw err;
+    blob = await upload(`uploads/${safeName}`, file, { ...options, access: 'public' });
+  }
+  showProgress(100, 'Starting uploads…');
+  const body = Object.fromEntries(data.entries());
+  delete body.video;
+  body.blobUrl = blob.url;
+  body.fileName = file.name;
+  const res = await fetch(api('/api/upload'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || `Upload failed (${res.status})`);
+  return json;
+}
+
+$('#form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
   const platforms = [...form.querySelectorAll('input[name=platforms]:checked')].map((i) => i.value);
   if (!platforms.length) return alert('ഒരു platform എങ്കിലും തിരഞ്ഞെടുക്കൂ');
-  if (!input.files[0]) return alert('Video തിരഞ്ഞെടുക്കൂ');
+  const file = input.files[0];
+  if (!file) return alert('Video തിരഞ്ഞെടുക്കൂ');
+  if (status.maxVideoBytes && file.size > status.maxVideoBytes) {
+    return alert(`Video 300 MB-യിൽ കൂടുതലാണ് (${(file.size / 1024 / 1024).toFixed(0)} MB). ചെറുതാക്കി വീണ്ടും ശ്രമിക്കൂ.`);
+  }
 
   const data = new FormData(form);
   data.delete('platforms');
   data.set('platforms', platforms.join(','));
 
-  const bar = $('#sendProgress');
   const submit = $('#submit');
-  bar.hidden = false;
   submit.disabled = true;
-
-  const xhr = new XMLHttpRequest();
-  xhr.open('POST', api('/api/upload'));
-  xhr.upload.onprogress = (ev) => {
-    if (!ev.lengthComputable) return;
-    const pct = Math.round((ev.loaded / ev.total) * 100);
-    bar.querySelector('div').style.width = `${pct}%`;
-    bar.querySelector('span').textContent = pct < 100 ? `Sending to server ${pct}%` : 'Starting uploads…';
-  };
-  xhr.onload = () => {
-    submit.disabled = false;
-    bar.hidden = true;
-    let res = {};
-    try { res = JSON.parse(xhr.responseText); } catch {}
-    if (xhr.status !== 200) return alert(res.error || `Upload failed (${xhr.status})`);
-    form.reset();
-    preview.hidden = true;
-    preview.removeAttribute('src');
-    $('#dropText').textContent = 'Video തിരഞ്ഞെടുക്കൂ (അല്ലെങ്കിൽ ഇവിടെ drag ചെയ്യൂ)';
-    $('#capCount').textContent = '0 / 2200';
+  showProgress(0, 'Starting…');
+  try {
+    if (status.blobUploads) await sendViaBlob(file, data);
+    else await sendDirect(data);
+    resetForm(form);
     loadJobs();
-  };
-  xhr.onerror = () => {
+  } catch (err) {
+    alert(err.message);
+  } finally {
     submit.disabled = false;
-    bar.hidden = true;
-    alert('Network error');
-  };
-  xhr.send(data);
+    $('#sendProgress').hidden = true;
+  }
 });
 
 // ---------- history ----------

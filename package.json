@@ -12,6 +12,8 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@vercel/blob": "^2.9.0",
+    "@vercel/functions": "^3.11.4",
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
     "googleapis": "^144.0.0",
