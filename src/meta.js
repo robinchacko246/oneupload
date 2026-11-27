@@ -182,7 +182,7 @@ export async function deleteFacebookPost(page, id) {
 
 export async function deleteInstagramMedia(page, mediaId) {
   if (!page.permissions.includes('instagram_manage_contents')) {
-    throw new Error('Instagram-ൽ delete ചെയ്യാൻ permission ഇല്ല. Channels-ൽ ഈ Instagram "Reconnect" ചെയ്ത് വീണ്ടും ശ്രമിക്കൂ.');
+    throw new Error('No permission to delete on Instagram. Reconnect this Instagram account on the Channels page and try again.');
   }
   return graphDelete(`/${mediaId}`, page.accessToken);
 }

@@ -115,7 +115,7 @@ export function youtubeIdFromUrl(url) {
 
 export async function deleteYouTubeVideo(channel, videoId) {
   if (!youtubeCanDelete(channel)) {
-    throw new Error('YouTube-ൽ delete ചെയ്യാൻ permission ഇല്ല. Channels-ൽ ഈ YouTube "Reconnect" ചെയ്ത് വീണ്ടും ശ്രമിക്കൂ.');
+    throw new Error('No permission to delete on YouTube. Reconnect this YouTube channel on the Channels page and try again.');
   }
   try {
     await apiFor(channel).videos.delete({ id: videoId });

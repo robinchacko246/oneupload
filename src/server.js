@@ -79,6 +79,9 @@ function readCookie(req, name) {
   return '';
 }
 
+// Messages follow the language the user picked in the app (cookie set by public/i18n.js).
+const tr = (req, ml, en) => (readCookie(req, 'ou_lang') === 'ml' ? ml : en);
+
 const isHttps = (req) => req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0] === 'https';
 
 function startSession(req, res, userId) {
@@ -133,11 +136,11 @@ app.post(
     const { name = '', email = '', password = '', invite = '' } = req.body || {};
     if (config.appPassword && !safeEqual(invite, config.appPassword)) {
       await slow();
-      return res.status(403).json({ error: 'Invite code തെറ്റാണ്' });
+      return res.status(403).json({ error: tr(req, 'Invite code തെറ്റാണ്', 'Wrong invite code') });
     }
-    if (!validEmail(email)) return res.status(400).json({ error: 'ശരിയായ email കൊടുക്കൂ' });
-    if (String(password).length < 8) return res.status(400).json({ error: 'Password കുറഞ്ഞത് 8 അക്ഷരം വേണം' });
-    if (await db.findUserByEmail(email)) return res.status(400).json({ error: 'ഈ email-ൽ already account ഉണ്ട്. Login ചെയ്യൂ.' });
+    if (!validEmail(email)) return res.status(400).json({ error: tr(req, 'ശരിയായ email കൊടുക്കൂ', 'Enter a valid email') });
+    if (String(password).length < 8) return res.status(400).json({ error: tr(req, 'Password കുറഞ്ഞത് 8 അക്ഷരം വേണം', 'Password must be at least 8 characters') });
+    if (await db.findUserByEmail(email)) return res.status(400).json({ error: tr(req, 'ഈ email-ൽ already account ഉണ്ട്. Login ചെയ്യൂ.', 'An account with this email already exists. Log in instead.') });
     const first = (await db.countUsers()) === 0;
     const user = await db.createUser({ email, name: String(name).trim().slice(0, 80), passwordHash: hashPassword(password), isOwner: first });
     // The first account takes over the channels and posts from the single-user version.
@@ -154,7 +157,7 @@ app.post(
     const user = validEmail(email) ? await db.findUserByEmail(email) : null;
     if (!user || !verifyPassword(password, user.passwordHash)) {
       await slow();
-      return res.status(401).json({ error: 'Email അല്ലെങ്കിൽ password തെറ്റാണ്' });
+      return res.status(401).json({ error: tr(req, 'Email അല്ലെങ്കിൽ password തെറ്റാണ്', 'Wrong email or password') });
     }
     startSession(req, res, user.id);
     res.json({ ok: true });
@@ -455,7 +458,7 @@ function checkScheduleTime(fields) {
 async function buildTargets(userId, fields, state) {
   const channels = await db.listChannels(userId);
   const chosen = fields.channelIds.map((id) => channels.find((c) => c.id === id)).filter(Boolean);
-  if (!chosen.length) throw httpError(400, 'ഒരു channel എങ്കിലും തിരഞ്ഞെടുക്കൂ');
+  if (!chosen.length) throw httpError(400, 'Select at least one channel');
   const message = state === 'pending' ? 'Waiting' : STATE_LABEL[state];
   return Object.fromEntries(
     chosen.map((c) => [c.id, { platform: c.platform, channelName: c.name, avatar: c.avatar, state, message }]),
@@ -749,7 +752,7 @@ app.post(
     if (!post || post.targets?.[key]?.state !== 'error') return res.status(400).json({ error: 'Nothing to retry' });
     if (liveJobs.has(post.id)) return res.status(400).json({ error: 'Upload is still running' });
     if (!publicPost(post).canRetry) {
-      return res.status(400).json({ error: 'Video ഇനി ലഭ്യമല്ല. വീണ്ടും upload ചെയ്യൂ (ഈ channel മാത്രം tick ചെയ്ത്).' });
+      return res.status(400).json({ error: tr(req, 'Video ഇനി ലഭ്യമല്ല. വീണ്ടും upload ചെയ്യൂ (ഈ channel മാത്രം tick ചെയ്ത്).', 'The media is no longer available. Upload it again with only this channel ticked.') });
     }
     post.targets[key] = { ...post.targets[key], state: 'pending', message: 'Retrying' };
     await db.patchTarget(post.id, key, post.targets[key]);
@@ -774,7 +777,7 @@ app.post(
     try {
       if (t.platform === 'youtube') await deleteYouTubeVideo(ch, t.postId || youtubeIdFromUrl(t.url));
       else if (t.platform === 'instagram') {
-        if (!t.postId) throw new Error('ഈ പഴയ Instagram post app-ൽ നിന്ന് delete ചെയ്യാൻ പറ്റില്ല. Instagram-ൽ "Open" ചെയ്ത് delete ചെയ്യൂ.');
+        if (!t.postId) throw new Error(tr(req, 'ഈ പഴയ Instagram post app-ൽ നിന്ന് delete ചെയ്യാൻ പറ്റില്ല. Instagram-ൽ "Open" ചെയ്ത് delete ചെയ്യൂ.', 'This older Instagram post cannot be deleted from the app. Use "Open" and delete it on Instagram.'));
         await deleteInstagramMedia(pageFromChannel(ch), t.postId);
       } else await deleteFacebookPost(pageFromChannel(ch), t.postId || facebookIdFromUrl(t.url));
     } catch (err) {

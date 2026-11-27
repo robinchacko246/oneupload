@@ -1,4 +1,5 @@
 const $ = (s) => document.getElementById(s);
+const t = window.t || ((ml, en) => en);
 const form = $('loginForm');
 const err = $('err');
 const go = $('go');
@@ -10,7 +11,7 @@ function applyMode() {
   $('name').hidden = !register;
   $('invite').hidden = !register;
   $('password').autocomplete = register ? 'new-password' : 'current-password';
-  $('password').placeholder = register ? 'Password (8+ അക്ഷരം)' : 'Password';
+  $('password').placeholder = register ? t('Password (8+ അക്ഷരം)', 'Password (8+ characters)') : 'Password';
   go.textContent = register ? 'Create account' : 'Login';
   $('hint').hidden = !register;
   err.textContent = '';
@@ -23,8 +24,8 @@ fetch('/api/auth-info')
   .then((r) => r.json())
   .then((info) => {
     $('hint').textContent = info.firstUser
-      ? 'ആദ്യത്തെ account ആണ് (owner). പഴയ app-ലെ channels-ഉം posts-ഉം ഇതിലേക്ക് മാറും. Invite code = പഴയ app password.'
-      : 'Team-ലെ ആളുകൾക്ക് owner തരുന്ന invite code വേണം.';
+      ? t('ആദ്യത്തെ account ആണ് (owner). പഴയ app-ലെ channels-ഉം posts-ഉം ഇതിലേക്ക് മാറും. Invite code = പഴയ app password.', 'This is the first account (owner). Channels and posts from the old app move here. Invite code = the old app password.')
+      : t('Team-ലെ ആളുകൾക്ക് owner തരുന്ന invite code വേണം.', 'New accounts need the invite code from the owner.');
     if (info.firstUser) {
       document.querySelector('input[name=authMode][value=register]').checked = true;
     }

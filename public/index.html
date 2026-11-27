@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ml">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -10,6 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Malayalam:wght@400;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css" />
+  <script src="/i18n.js" defer></script>
 </head>
 <body>
   <div class="bg"><span></span><span></span><span></span></div>
@@ -21,10 +22,11 @@
       </div>
       <div>
         <h1>One <span class="grad-text">Upload</span></h1>
-        <p>ഒരു തവണ അപ്‌ലോഡ് ചെയ്യൂ, എല്ലായിടത്തും പോസ്റ്റ് ആവും</p>
+        <p data-en="Upload once, post everywhere">ഒരു തവണ അപ്‌ലോഡ് ചെയ്യൂ, എല്ലായിടത്തും പോസ്റ്റ് ആവും</p>
       </div>
     </div>
     <div class="me">
+      <div class="lang-switch" role="group" aria-label="Language"><button type="button" data-lang="en">EN</button><button type="button" data-lang="ml">മല</button></div>
       <span class="avatar-me" id="meAvatar">?</span>
       <span class="me-name" id="meName"></span>
       <button class="btn small ghost" id="logout" title="Logout">
@@ -71,8 +73,8 @@
               <div class="cloud" style="margin:0 auto 10px">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M20 16.5V19a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2.5"/></svg>
               </div>
-              <strong>Video അല്ലെങ്കിൽ photos തിരഞ്ഞെടുക്കൂ</strong><br />
-              <small>1 video · അല്ലെങ്കിൽ 1–10 photos (carousel) · max 300 MB</small>
+              <strong data-en="Choose a video or photos">Video അല്ലെങ്കിൽ photos തിരഞ്ഞെടുക്കൂ</strong><br />
+              <small data-en="1 video · or 1–10 photos (carousel) · max 300 MB">1 video · അല്ലെങ്കിൽ 1–10 photos (carousel) · max 300 MB</small>
             </div>
             <div class="media-grid" id="mediaGrid" hidden></div>
             <div class="file-row" id="dropFile" hidden>
@@ -101,7 +103,7 @@
 
           <div class="group">
             <span class="label">Caption</span>
-            <textarea name="caption" rows="5" maxlength="2200" placeholder="Caption എഴുതൂ… #kerala #travel"></textarea>
+            <textarea name="caption" rows="5" maxlength="2200" placeholder="Caption എഴുതൂ… #kerala #travel" data-en-ph="Write a caption… #kerala #travel"></textarea>
             <div class="counter" id="capCount">0 / 2200</div>
           </div>
 
@@ -112,9 +114,9 @@
               <svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
             </summary>
             <div class="body">
-              <label><span class="label">Title <small class="muted">(ഒഴിച്ചിട്ടാൽ caption-ന്റെ ആദ്യ വരി)</small></span><input class="text" name="ytTitle" maxlength="100" /></label>
-              <label><span class="label">Description <small class="muted">(ഒഴിച്ചിട്ടാൽ caption)</small></span><textarea name="ytDescription" rows="3" maxlength="5000"></textarea></label>
-              <label><span class="label">Tags <small class="muted">(comma കൊണ്ട്)</small></span><input class="text" name="tags" placeholder="kerala, travel, vlog" /></label>
+              <label><span class="label">Title <small class="muted" data-en="(empty = first line of the caption)">(ഒഴിച്ചിട്ടാൽ caption-ന്റെ ആദ്യ വരി)</small></span><input class="text" name="ytTitle" maxlength="100" /></label>
+              <label><span class="label">Description <small class="muted" data-en="(empty = caption)">(ഒഴിച്ചിട്ടാൽ caption)</small></span><textarea name="ytDescription" rows="3" maxlength="5000"></textarea></label>
+              <label><span class="label">Tags <small class="muted" data-en="(comma separated)">(comma കൊണ്ട്)</small></span><input class="text" name="tags" placeholder="kerala, travel, vlog" /></label>
               <label><span class="label">Visibility</span>
                 <select class="text" name="privacy">
                   <option value="public">Public</option>
@@ -128,9 +130,9 @@
           <div class="group">
             <span class="label">When</span>
             <div class="segmented three" id="when">
-              <label><input type="radio" name="mode" value="now" checked /><span>⚡ Now<small>ഉടനെ post</small></span></label>
-              <label><input type="radio" name="mode" value="schedule" /><span>📅 Schedule<small>സമയം വെക്കാം</small></span></label>
-              <label><input type="radio" name="mode" value="draft" /><span>📝 Draft<small>പിന്നീട്</small></span></label>
+              <label><input type="radio" name="mode" value="now" checked /><span data-en="⚡ Now<small>post right away</small>">⚡ Now<small>ഉടനെ post</small></span></label>
+              <label><input type="radio" name="mode" value="schedule" /><span data-en="📅 Schedule<small>pick a time</small>">📅 Schedule<small>സമയം വെക്കാം</small></span></label>
+              <label><input type="radio" name="mode" value="draft" /><span data-en="📝 Draft<small>save for later</small>">📝 Draft<small>പിന്നീട്</small></span></label>
             </div>
             <div class="when-time" id="whenTime" hidden>
               <input class="text" type="datetime-local" id="scheduleAt" />
@@ -171,14 +173,14 @@
       <details id="timerBox">
         <summary>⏰ Auto-posting timer <span class="muted" id="timerHint">(cron-job.org setup)</span></summary>
         <div class="timer-body">
-          <p>Schedule ചെയ്ത post കൃത്യ സമയത്ത് പോവാൻ <b>cron-job.org</b>-ൽ ഈ link ഓരോ 10 മിനിറ്റിലും വിളിക്കാൻ set ചെയ്യൂ. App തുറക്കുമ്പോഴും due ആയ posts പോവും.</p>
+          <p data-en="To publish scheduled posts on time, set <b>cron-job.org</b> to call this link every 10 minutes. Due posts also go out whenever the app is opened.">Schedule ചെയ്ത post കൃത്യ സമയത്ത് പോവാൻ <b>cron-job.org</b>-ൽ ഈ link ഓരോ 10 മിനിറ്റിലും വിളിക്കാൻ set ചെയ്യൂ. App തുറക്കുമ്പോഴും due ആയ posts പോവും.</p>
           <div class="copy-row"><input class="text" id="cronUrl" readonly /><button class="btn small" id="copyCron">Copy</button></div>
           <ol>
-            <li>cron-job.org-ൽ free account ഉണ്ടാക്കി login ചെയ്യൂ</li>
-            <li><b>Create cronjob</b> → URL-ൽ മുകളിലെ link paste ചെയ്യൂ</li>
+            <li data-en="Create a free account on cron-job.org and log in">cron-job.org-ൽ free account ഉണ്ടാക്കി login ചെയ്യൂ</li>
+            <li data-en="<b>Create cronjob</b> → paste the link above as the URL"><b>Create cronjob</b> → URL-ൽ മുകളിലെ link paste ചെയ്യൂ</li>
             <li>Schedule: <b>Every 10 minutes</b> → <b>Create</b></li>
           </ol>
-          <p class="muted">ഈ link password പോലെയാണ്, ആർക്കും കൊടുക്കരുത്.</p>
+          <p class="muted" data-en="Treat this link like a password; do not share it.">ഈ link password പോലെയാണ്, ആർക്കും കൊടുക്കരുത്.</p>
         </div>
       </details>
     </section>
@@ -204,7 +206,7 @@
     <section class="card">
       <div class="card-title"><h2>Ideas</h2><span class="ml">ആശയങ്ങൾ</span></div>
       <form id="ideaForm" class="idea-form">
-        <textarea id="ideaText" rows="3" placeholder="പുതിയ reel ആശയം, caption, hashtags…"></textarea>
+        <textarea id="ideaText" rows="3" placeholder="പുതിയ reel ആശയം, caption, hashtags…" data-en-ph="New reel idea, caption, hashtags…"></textarea>
         <button class="btn" type="submit">💡 Save idea</button>
       </form>
       <div id="ideaList" class="ideas"></div>
@@ -228,11 +230,11 @@
       <div class="connect-row">
         <a class="connect-tile" href="/auth/google">
           <span class="pi yt" data-icon="youtube"></span>
-          <b>YouTube channel</b><small>Google login · ഓരോ channel-ഉം വേറെ ചേർക്കാം</small>
+          <b>YouTube channel</b><small data-en="Google login · add each channel separately">Google login · ഓരോ channel-ഉം വേറെ ചേർക്കാം</small>
         </a>
         <a class="connect-tile" href="/auth/facebook">
           <span class="pi ig" data-icon="instagram"></span>
-          <b>Instagram account</b><small>Business/Creator · Facebook login വഴി</small>
+          <b>Instagram account</b><small data-en="Business/Creator · via Facebook login">Business/Creator · Facebook login വഴി</small>
         </a>
         <a class="connect-tile" href="/auth/facebook">
           <span class="pi fb" data-icon="facebook"></span>
@@ -249,8 +251,8 @@
   <!-- choose which Instagram accounts / Pages to add after a Facebook login -->
   <div class="overlay" id="picker" hidden>
     <form class="stage edit-box" id="pickerForm" role="dialog" aria-modal="true" aria-labelledby="pickerTitle">
-      <h3 id="pickerTitle">ഏതൊക്കെ ചേർക്കണം?</h3>
-      <p class="muted" style="text-align:center;margin:-8px 0 16px">Facebook login-ൽ നിന്ന് കിട്ടിയ accounts. വേണ്ടത് tick ചെയ്യൂ.</p>
+      <h3 id="pickerTitle" data-en="Choose accounts">ഏതൊക്കെ ചേർക്കണം?</h3>
+      <p class="muted" style="text-align:center;margin:-8px 0 16px" data-en="Accounts from your Facebook login. Tick the ones to add.">Facebook login-ൽ നിന്ന് കിട്ടിയ accounts. വേണ്ടത് tick ചെയ്യൂ.</p>
       <div id="pickerList" class="picker-list"></div>
       <div class="actions">
         <button type="button" class="btn" id="pickerCancel">Cancel</button>
@@ -287,7 +289,7 @@
         <textarea id="editCaption" rows="5" maxlength="2200"></textarea>
       </div>
       <div class="group">
-        <span class="label">YouTube title <small class="muted">(ഒഴിച്ചിട്ടാൽ caption-ന്റെ ആദ്യ വരി)</small></span>
+        <span class="label">YouTube title <small class="muted" data-en="(empty = first line of the caption)">(ഒഴിച്ചിട്ടാൽ caption-ന്റെ ആദ്യ വരി)</small></span>
         <input class="text" id="editYtTitle" maxlength="100" />
       </div>
       <div class="group">
@@ -324,10 +326,10 @@
         </div>
       </div>
       <h3 id="stageTitle">Uploading…</h3>
-      <p id="stageText">Video അയക്കുന്നു</p>
+      <p id="stageText" data-en="Sending the video">Video അയക്കുന്നു</p>
       <div class="targets" id="targets"></div>
       <div class="actions">
-        <button class="btn" id="hideOverlay" hidden>Close · background-ൽ തുടരും</button>
+        <button class="btn" id="hideOverlay" hidden data-en="Close · keeps going in the background">Close · background-ൽ തുടരും</button>
         <button class="btn-primary" id="doneOverlay" style="width:auto;padding:12px 28px" hidden>Done 🎉</button>
       </div>
     </div>

@@ -1,4 +1,6 @@
 const $ = (s) => document.querySelector(s);
+// Language helper: tr('മലയാളം', 'English'). English unless the user picked Malayalam.
+const tr = (ml, en) => (window.LANG === 'ml' ? ml : en);
 const $$ = (s) => [...document.querySelectorAll(s)];
 // Build URLs from the origin so the page also works when opened as http://user:pass@host/
 const api = (p) => new URL(p, location.origin).toString();
@@ -108,7 +110,7 @@ async function loadStatus() {
 function renderChannelMini() {
   $('#channelMini').innerHTML = channels.length
     ? channels.map((c) => avatar(c)).join('') + `<a class="btn small" href="#channels">＋ Add</a>`
-    : `<div class="empty" style="padding:8px">Channels ഒന്നുമില്ല. <a href="#channels">ചേർക്കൂ →</a></div>`;
+    : `<div class="empty" style="padding:8px">${tr('Channels ഒന്നുമില്ല. <a href="#channels">ചേർക്കൂ →</a>', 'No channels yet. <a href="#channels">Add one →</a>')}</div>`;
 }
 
 // ---------- composer: which channels to post to (remembered per device) ----------
@@ -125,7 +127,7 @@ function savedChannelIds() {
 function renderChannelPicker() {
   const box = $('#channelPicker');
   if (!channels.length) {
-    box.innerHTML = '<div class="picker-empty">ആദ്യം ഒരു channel ചേർക്കൂ → <a href="#channels">Channels</a></div>';
+    box.innerHTML = `<div class="picker-empty">${tr('ആദ്യം ഒരു channel ചേർക്കൂ', 'Add a channel first')} → <a href="#channels">Channels</a></div>`;
     return updatePickedCount();
   }
   const saved = savedChannelIds();
@@ -165,7 +167,7 @@ function renderChannelList() {
     ? list
         .map((c) => {
           const reconnect = c.platform === 'youtube' ? '/auth/google' : '/auth/facebook';
-          const sub = [NAMES[c.platform], c.platform === 'instagram' && c.info?.pageName ? `Page: ${c.info.pageName}` : '', c.canDelete ? '' : '⚠️ delete permission ഇല്ല — Reconnect ചെയ്യൂ']
+          const sub = [NAMES[c.platform], c.platform === 'instagram' && c.info?.pageName ? `Page: ${c.info.pageName}` : '', c.canDelete ? '' : tr('⚠️ delete permission ഇല്ല — Reconnect ചെയ്യൂ', '⚠️ no delete permission — Reconnect')]
             .filter(Boolean)
             .join(' · ');
           return `<div class="chrow">${avatar(c)}
@@ -175,7 +177,7 @@ function renderChannelList() {
           </div>`;
         })
         .join('')
-    : '<div class="empty"><span class="big">🔗</span>ഇതുവരെ channels ഇല്ല. മുകളിൽ നിന്ന് YouTube / Instagram / Facebook ചേർക്കൂ.</div>';
+    : `<div class="empty"><span class="big">🔗</span>${tr('ഇതുവരെ channels ഇല്ല. മുകളിൽ നിന്ന് YouTube / Instagram / Facebook ചേർക്കൂ.', 'No channels yet. Connect YouTube / Instagram / Facebook above.')}</div>`;
 }
 
 $('#channelList').addEventListener('click', async (e) => {
@@ -184,8 +186,8 @@ $('#channelList').addEventListener('click', async (e) => {
   const c = chanById(btn.dataset.removeChannel);
   const ok = await askConfirm({
     icon: avatar(c),
-    title: `${channelLabel(c)} മാറ്റണോ?`,
-    text: 'ഈ channel app-ൽ നിന്ന് മാറും. ഇതിനകം post ചെയ്തവ അവിടെ തന്നെ ഉണ്ടാവും. Schedule ചെയ്തവ ഈ channel-ലേക്ക് പോവില്ല.',
+    title: tr(`${channelLabel(c)} മാറ്റണോ?`, `Remove ${channelLabel(c)}?`),
+    text: tr('ഈ channel app-ൽ നിന്ന് മാറും. ഇതിനകം post ചെയ്തവ അവിടെ തന്നെ ഉണ്ടാവും. Schedule ചെയ്തവ ഈ channel-ലേക്ക് പോവില്ല.', 'The channel is removed from the app and its access tokens are deleted. Posts already published stay where they are. Scheduled posts will not go to this channel.'),
     yes: 'Remove',
   });
   if (!ok) return;
@@ -212,7 +214,7 @@ async function openPicker(id) {
           (o.ig ? row('instagram', o.ig.id, `@${o.ig.username}`, `Instagram · ${o.pageName}`, o.ig.picture, o.ig.connected) : '') +
           row('facebook', o.pageId, o.pageName, 'Facebook Page', o.pagePicture, o.pageConnected),
       )
-      .join('') || '<div class="empty">Accounts ഒന്നും കിട്ടിയില്ല</div>';
+      .join('') || `<div class="empty">${tr('Accounts ഒന്നും കിട്ടിയില്ല', 'No accounts found')}</div>`;
   $('#picker').hidden = false;
   $('#pickerForm').onsubmit = async (e) => {
     e.preventDefault();
@@ -245,7 +247,7 @@ function showFile(file) {
   $('#dropFile').hidden = false;
   $('#fileName').textContent = file.name;
   const tooBig = status.maxVideoBytes && file.size > status.maxVideoBytes;
-  $('#fileTags').innerHTML = `<span class="tag ${tooBig ? 'bad' : ''}">${mb(file.size)}${tooBig ? ' · 300 MB-യിൽ കൂടുതൽ' : ''}</span>`;
+  $('#fileTags').innerHTML = `<span class="tag ${tooBig ? 'bad' : ''}">${mb(file.size)}${tooBig ? tr(' · 300 MB-യിൽ കൂടുതൽ', ' · over 300 MB') : ''}</span>`;
   preview.src = URL.createObjectURL(file);
   preview.play().catch(() => {});
   preview.onloadedmetadata = () => {
@@ -297,7 +299,7 @@ function setPhotoUi(on) {
   // YouTube channels can't take photo posts: switch them off while photos are picked.
   $$('input[name=channels][data-platform=youtube]').forEach((i) => {
     i.disabled = on;
-    i.closest('.chpick').title = on ? 'YouTube photo posts സ്വീകരിക്കില്ല' : channelLabel(chanById(i.value) || {});
+    i.closest('.chpick').title = on ? tr('YouTube photo posts സ്വീകരിക്കില്ല', 'YouTube does not accept photo posts') : channelLabel(chanById(i.value) || {});
   });
   updatePickedCount?.();
   document.querySelector('input[name=type][value=photo]').disabled = !on;
@@ -342,8 +344,8 @@ function renderPicked() {
       .join('') +
     (picked.length < 10 ? '<button type="button" class="thumb add" data-add="1">＋<small>Add</small></button>' : '') +
     `<div class="grid-info">${picked.length === 1 ? 'Photo post' : `Carousel · ${picked.length} items`} · ${mb(total)}${
-      total > (status.maxVideoBytes || Infinity) ? ' · <b style="color:var(--err)">300 MB-യിൽ കൂടുതൽ</b>' : ''
-    }<br><small class="muted">Instagram-നായി photos 4:5 – 1.91:1 ratio-യിലേക്ക് crop ചെയ്യും</small></div>`;
+      total > (status.maxVideoBytes || Infinity) ? ` · <b style="color:var(--err)">${tr('300 MB-യിൽ കൂടുതൽ', 'over 300 MB')}</b>` : ''
+    }<br><small class="muted">${tr('Instagram-നായി photos 4:5 – 1.91:1 ratio-യിലേക്ക് crop ചെയ്യും', 'Photos are cropped to a 4:5 – 1.91:1 ratio for Instagram')}</small></div>`;
 }
 
 $('#mediaGrid').addEventListener('click', (e) => {
@@ -413,7 +415,7 @@ const overlay = {
           <small>Waiting</small></div>`,
       )
       .join('');
-    this.progress(0, 'Uploading…', 'Video അയക്കുന്നു');
+    this.progress(0, 'Uploading…', tr('Video അയക്കുന്നു', 'Sending the video'));
   },
 
   progress(pct, title, text) {
@@ -432,8 +434,8 @@ const overlay = {
     $('#center').innerHTML = `<div style="font-size:60px;line-height:1">${scheduled ? '📅' : '📝'}</div>`;
     $('#stageTitle').textContent = scheduled ? 'Scheduled!' : 'Draft saved';
     $('#stageText').textContent = scheduled
-      ? `${fmtWhen(job.scheduledAt)}-ന് ഓട്ടോമാറ്റിക്കായി post ആവും`
-      : 'Queue → Drafts-ൽ നിന്ന് എപ്പോൾ വേണമെങ്കിലും post ചെയ്യാം';
+      ? tr(`${fmtWhen(job.scheduledAt)}-ന് ഓട്ടോമാറ്റിക്കായി post ആവും`, `Will be posted automatically on ${fmtWhen(job.scheduledAt)}`)
+      : tr('Queue → Drafts-ൽ നിന്ന് എപ്പോൾ വേണമെങ്കിലും post ചെയ്യാം', 'Post it any time from Queue → Drafts');
     $$('#targets .target').forEach((t) => {
       t.className = 'target done';
       t.querySelector('.badge').innerHTML = ICONS.check;
@@ -449,7 +451,7 @@ const overlay = {
     this.ring.style.strokeDashoffset = '0';
     $('#center').innerHTML = ICONS.rocket;
     $('#stageTitle').textContent = 'Posting…';
-    $('#stageText').textContent = 'YouTube, Instagram-ലേക്ക് അയക്കുന്നു';
+    $('#stageText').textContent = tr('Channels-ലേക്ക് അയക്കുന്നു', 'Publishing to your channels');
     $('#hideOverlay').hidden = false;
     this.poll();
   },
@@ -491,8 +493,8 @@ const overlay = {
     $('#doneOverlay').hidden = false;
     if (!failed.length) {
       $('#center').innerHTML = `<div style="font-size:64px;line-height:1">🎉</div>`;
-      $('#stageTitle').textContent = 'എല്ലായിടത്തും പോസ്റ്റ് ആയി!';
-      $('#stageText').textContent = 'Instagram-ൽ നിന്ന് Facebook-ലേക്ക് auto-share ആവും';
+      $('#stageTitle').textContent = tr('എല്ലായിടത്തും പോസ്റ്റ് ആയി!', 'Posted everywhere!');
+      $('#stageText').textContent = tr('എല്ലാ channels-ലും post ആയി', 'Your post is live on every selected channel');
       confetti();
     } else {
       $('#center').innerHTML = `<div style="font-size:56px;line-height:1">⚠️</div>`;
@@ -585,7 +587,7 @@ async function toInstagramJpeg(file) {
   try {
     bitmap = await createImageBitmap(file);
   } catch {
-    throw new Error(`"${file.name}" തുറക്കാൻ പറ്റിയില്ല (HEIC ആണെങ്കിൽ JPEG ആക്കി വീണ്ടും ശ്രമിക്കൂ)`);
+    throw new Error(tr(`"${file.name}" തുറക്കാൻ പറ്റിയില്ല (HEIC ആണെങ്കിൽ JPEG ആക്കി വീണ്ടും ശ്രമിക്കൂ)`, `Could not open "${file.name}" (if it is HEIC, convert it to JPEG and try again)`));
   }
   let sx = 0;
   let sy = 0;
@@ -643,7 +645,7 @@ $('#form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
   const chosen = pickedChannels();
-  if (!chosen.length) return toast(channels.length ? 'ഒരു channel എങ്കിലും തിരഞ്ഞെടുക്കൂ' : 'ആദ്യം Channels-ൽ ഒരു channel ചേർക്കൂ', true);
+  if (!chosen.length) return toast(channels.length ? tr('ഒരു channel എങ്കിലും തിരഞ്ഞെടുക്കൂ', 'Select at least one channel') : tr('ആദ്യം Channels-ൽ ഒരു channel ചേർക്കൂ', 'Add a channel on the Channels page first'), true);
   const platforms = chosen.map((c) => c.platform);
   if (!picked.length) {
     drop.classList.add('over');
@@ -654,18 +656,18 @@ $('#form').addEventListener('submit', async (e) => {
   const file = picked[0];
   const totalSize = picked.reduce((n, f) => n + f.size, 0);
   if (status.maxVideoBytes && totalSize > status.maxVideoBytes) {
-    return toast(`300 MB-യിൽ കൂടുതലാണ് (${mb(totalSize)}). ചെറുതാക്കി വീണ്ടും ശ്രമിക്കൂ.`, true);
+    return toast(tr(`300 MB-യിൽ കൂടുതലാണ് (${mb(totalSize)}). ചെറുതാക്കി വീണ്ടും ശ്രമിക്കൂ.`, `Over 300 MB (${mb(totalSize)}). Use a smaller file and try again.`), true);
   }
   if (photos && platforms.includes('facebook') && picked.length > 1 && picked.some(isVideo)) {
-    return toast('Facebook multi-photo post-ൽ video പറ്റില്ല. FB Page untick ചെയ്യൂ.', true);
+    return toast(tr('Facebook multi-photo post-ൽ video പറ്റില്ല. FB Page untick ചെയ്യൂ.', 'Facebook multi-photo posts cannot include a video. Untick the Facebook Page.'), true);
   }
 
   const mode = currentMode();
   let scheduledAt = null;
   if (mode === 'schedule') {
     const when = new Date($('#scheduleAt').value);
-    if (Number.isNaN(when.getTime())) return toast('Schedule ചെയ്യാനുള്ള തീയതിയും സമയവും തിരഞ്ഞെടുക്കൂ', true);
-    if (when.getTime() < Date.now()) return toast('ആ സമയം കഴിഞ്ഞുപോയി. ഭാവിയിലെ ഒരു സമയം തിരഞ്ഞെടുക്കൂ', true);
+    if (Number.isNaN(when.getTime())) return toast(tr('Schedule ചെയ്യാനുള്ള തീയതിയും സമയവും തിരഞ്ഞെടുക്കൂ', 'Pick a date and time to schedule'), true);
+    if (when.getTime() < Date.now()) return toast(tr('ആ സമയം കഴിഞ്ഞുപോയി. ഭാവിയിലെ ഒരു സമയം തിരഞ്ഞെടുക്കൂ', 'That time has passed. Pick a time in the future'), true);
     scheduledAt = when.toISOString();
   }
 
@@ -823,7 +825,7 @@ function renderAll(jobs) {
     .map((j) => {
       const removeBtn = jobActive(j)
         ? ''
-        : `<button class="icon-btn" data-remove="${esc(j.id)}" title="List-ൽ നിന്ന് മാറ്റുക">${UI_ICONS.remove}</button>`;
+        : `<button class="icon-btn" data-remove="${esc(j.id)}" title="${tr('List-ൽ നിന്ന് മാറ്റുക', 'Remove from list')}">${UI_ICONS.remove}</button>`;
       return `<div class="job" data-job="${esc(j.id)}">
         <div class="job-head">
           <b>${esc(titleOf(j))} <span class="muted">· ${typeLabel(j)}</span></b>
@@ -896,7 +898,7 @@ function render() {
   $('#jobs').innerHTML =
     html ||
     `<div class="empty"><span class="big">🎬</span>${
-      currentTab === 'all' ? 'ഇതുവരെ ഒന്നുമില്ല. ആദ്യത്തെ video അപ്‌ലോഡ് ചെയ്യൂ!' : `${NAMES[currentTab]}-ൽ ഇതുവരെ ഒന്നുമില്ല`
+      currentTab === 'all' ? tr('ഇതുവരെ ഒന്നുമില്ല. ആദ്യത്തെ video അപ്‌ലോഡ് ചെയ്യൂ!', 'Nothing yet. Upload your first post!') : tr(`${NAMES[currentTab]}-ൽ ഇതുവരെ ഒന്നുമില്ല`, `Nothing on ${NAMES[currentTab]} yet`)
     }</div>`;
   $('#more').hidden = total <= shown;
   $('#more').textContent = `Show more (${total - shown})`;
@@ -934,11 +936,11 @@ async function deletePost(btn) {
   const job = allJobs.find((j) => j.id === id);
   const t = job?.platforms?.[p] || {};
   const where = t.channelName || NAMES[platformOf(p, t)];
-  const extra = platformOf(p, t) === 'instagram' ? ' Facebook profile-ലേക്ക് auto-share ആയ copy Facebook-ൽ നിന്ന് വേറെ delete ചെയ്യണം.' : '';
+  const extra = platformOf(p, t) === 'instagram' ? tr(' Facebook profile-ലേക്ക് auto-share ആയ copy Facebook-ൽ നിന്ന് വേറെ delete ചെയ്യണം.', ' A copy auto-shared to a Facebook profile has to be deleted on Facebook separately.') : '';
   const ok = await askConfirm({
     icon: targetAvatar(p, t),
-    title: `${where}-ൽ നിന്ന് delete ചെയ്യണോ?`,
-    text: `"${titleOf(job)}" ${where}-ൽ നിന്ന് ഒഴിവാക്കും. ഇത് തിരിച്ചെടുക്കാൻ പറ്റില്ല.${extra}`,
+    title: tr(`${where}-ൽ നിന്ന് delete ചെയ്യണോ?`, `Delete from ${where}?`),
+    text: tr(`"${titleOf(job)}" ${where}-ൽ നിന്ന് ഒഴിവാക്കും. ഇത് തിരിച്ചെടുക്കാൻ പറ്റില്ല.${extra}`, `"${titleOf(job)}" will be deleted from ${where}. This cannot be undone.${extra}`),
   });
   if (!ok) return;
   btn.disabled = true;
@@ -954,7 +956,7 @@ async function deletePost(btn) {
     const i = allJobs.findIndex((j) => j.id === id);
     if (i >= 0) allJobs[i] = json;
     render();
-    toast(`${where}-ൽ നിന്ന് delete ചെയ്തു ✓`);
+    toast(tr(`${where}-ൽ നിന്ന് delete ചെയ്തു ✓`, `Deleted from ${where} ✓`));
   } catch (err) {
     btn.disabled = false;
     btn.innerHTML = UI_ICONS.trash;
@@ -967,8 +969,8 @@ async function takeOffList(btn) {
   const job = allJobs.find((j) => j.id === id);
   const ok = await askConfirm({
     icon: UI_ICONS.remove,
-    title: 'List-ൽ നിന്ന് മാറ്റണോ?',
-    text: `"${titleOf(job)}" ഈ list-ൽ നിന്ന് മാത്രം മാറും. YouTube/Instagram-ലെ post അവിടെ തന്നെ ഉണ്ടാവും.`,
+    title: tr('List-ൽ നിന്ന് മാറ്റണോ?', 'Remove from the list?'),
+    text: tr(`"${titleOf(job)}" ഈ list-ൽ നിന്ന് മാത്രം മാറും. YouTube/Instagram-ലെ post അവിടെ തന്നെ ഉണ്ടാവും.`, `"${titleOf(job)}" is only removed from this list. The published post stays on the platform.`),
     yes: 'Remove',
   });
   if (!ok) return;
@@ -998,7 +1000,7 @@ async function retryPost(btn) {
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(json.error || 'Retry failed');
-    toast(`${allJobs.find((j) => j.id === id)?.platforms?.[p]?.channelName || 'Channel'} വീണ്ടും ശ്രമിക്കുന്നു…`);
+    toast(`${allJobs.find((j) => j.id === id)?.platforms?.[p]?.channelName || 'Channel'}${tr(' വീണ്ടും ശ്രമിക്കുന്നു…', ': retrying…')}`);
     loadJobs();
   } catch (err) {
     btn.disabled = false;
@@ -1080,7 +1082,7 @@ function renderPlanner() {
   // "Coming up" on the Create page
   $('#upNext').innerHTML = scheduled.length
     ? scheduled.slice(0, 3).map((j) => plannedItem(j, { showDay: true })).join('')
-    : '<div class="empty"><span class="big">📅</span>Schedule ചെയ്ത posts ഇല്ല. "When → Schedule" തിരഞ്ഞെടുത്ത് സമയം വെക്കൂ.</div>';
+    : `<div class="empty"><span class="big">📅</span>${tr('Schedule ചെയ്ത posts ഇല്ല. "When → Schedule" തിരഞ്ഞെടുത്ത് സമയം വെക്കൂ.', 'No scheduled posts. Choose "When → Schedule" to set a time.')}</div>`;
 
   // Queue, grouped by day
   const groups = new Map();
@@ -1094,11 +1096,11 @@ function renderPlanner() {
     ? [...groups.values()]
         .map((g) => `<div class="qday"><h4>${esc(g.label)}</h4><div class="items">${g.items.map((j) => plannedItem(j)).join('')}</div></div>`)
         .join('')
-    : '<div class="empty"><span class="big">🗓️</span>Queue കാലിയാണ്. Create-ൽ "Schedule" തിരഞ്ഞെടുത്ത് post-ന് സമയം വെക്കൂ.</div>';
+    : `<div class="empty"><span class="big">🗓️</span>${tr('Queue കാലിയാണ്. Create-ൽ "Schedule" തിരഞ്ഞെടുത്ത് post-ന് സമയം വെക്കൂ.', 'The queue is empty. In Create, choose "Schedule" to give a post a time.')}</div>`;
 
   $('#draftList').innerHTML = drafts.length
     ? drafts.map((j) => plannedItem(j)).join('')
-    : '<div class="empty"><span class="big">📝</span>Drafts ഇല്ല</div>';
+    : `<div class="empty"><span class="big">📝</span>${tr('Drafts ഇല്ല', 'No drafts')}</div>`;
 
   if (!$('[data-view="calendar"].view').hidden) renderCalendar();
 }
@@ -1116,8 +1118,8 @@ document.addEventListener('click', async (e) => {
   if (act === 'now') {
     const ok = await askConfirm({
       icon: '<div style="font-size:34px">⚡</div>',
-      title: 'ഇപ്പോൾ തന്നെ post ചെയ്യണോ?',
-      text: `"${titleOf(job)}" ഇപ്പോൾ ${targetList(job).map((t) => t.name || NAMES[t.platform]).join(', ')}-ൽ post ആവും.`,
+      title: tr('ഇപ്പോൾ തന്നെ post ചെയ്യണോ?', 'Post it now?'),
+      text: tr(`"${titleOf(job)}" ഇപ്പോൾ ${targetList(job).map((t) => t.name || NAMES[t.platform]).join(', ')}-ൽ post ആവും.`, `"${titleOf(job)}" will be published now to ${targetList(job).map((t) => t.name || NAMES[t.platform]).join(', ')}.`),
       yes: 'Post now',
     });
     if (!ok) return;
@@ -1137,8 +1139,8 @@ document.addEventListener('click', async (e) => {
   if (act === 'delete') {
     const ok = await askConfirm({
       icon: UI_ICONS.trash,
-      title: job.status === 'draft' ? 'Draft delete ചെയ്യണോ?' : 'Scheduled post delete ചെയ്യണോ?',
-      text: `"${titleOf(job)}"-ഉം അതിന്റെ video-യും ഒഴിവാക്കും. ഇതുവരെ ഒന്നും post ചെയ്തിട്ടില്ല.`,
+      title: job.status === 'draft' ? tr('Draft delete ചെയ്യണോ?', 'Delete this draft?') : tr('Scheduled post delete ചെയ്യണോ?', 'Delete this scheduled post?'),
+      text: tr(`"${titleOf(job)}"-ഉം അതിന്റെ video-യും ഒഴിവാക്കും. ഇതുവരെ ഒന്നും post ചെയ്തിട്ടില്ല.`, `"${titleOf(job)}" and its media will be deleted. Nothing has been posted yet.`),
     });
     if (!ok) return;
     const res = await apiFetch(`/api/jobs/${encodeURIComponent(job.id)}/remove`, { method: 'POST' });
@@ -1163,7 +1165,7 @@ function openEditor(job) {
             ${avatar(c)}<span class="tick">✓</span><small>${esc(channelLabel(c))}</small></label>`,
         )
         .join('')
-    : '<div class="picker-empty">Channels ഇല്ല</div>';
+    : `<div class="picker-empty">${tr('Channels ഇല്ല', 'No channels')}</div>`;
   $('#editCaption').value = job.caption || '';
   $('#editYtTitle').value = job.settings?.ytTitle || '';
   const mode = job.status === 'scheduled' ? 'schedule' : 'draft';
@@ -1182,7 +1184,7 @@ $('#editForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!editing) return;
   const picked = $$('#editPlatforms input:checked:not(:disabled)').map((i) => i.value);
-  if (!picked.length) return toast('ഒരു channel എങ്കിലും തിരഞ്ഞെടുക്കൂ', true);
+  if (!picked.length) return toast(tr('ഒരു channel എങ്കിലും തിരഞ്ഞെടുക്കൂ', 'Select at least one channel'), true);
   const mode = document.querySelector('input[name=editMode]:checked').value;
   const body = {
     channels: picked.join(','),
@@ -1192,7 +1194,7 @@ $('#editForm').addEventListener('submit', async (e) => {
   };
   if (mode === 'schedule') {
     const when = new Date($('#editAt').value);
-    if (Number.isNaN(when.getTime()) || when < new Date()) return toast('ഭാവിയിലെ ഒരു സമയം തിരഞ്ഞെടുക്കൂ', true);
+    if (Number.isNaN(when.getTime()) || when < new Date()) return toast(tr('ഭാവിയിലെ ഒരു സമയം തിരഞ്ഞെടുക്കൂ', 'Pick a time in the future'), true);
     body.scheduledAt = when.toISOString();
   }
   const res = await apiFetch(`/api/jobs/${encodeURIComponent(editing.id)}/edit`, {
@@ -1272,7 +1274,7 @@ function renderCalendar() {
                     .join('')}</span></div>`,
           )
           .join('')
-      : '<div class="empty" style="padding:12px">ഈ ദിവസം posts ഇല്ല</div>'
+      : `<div class="empty" style="padding:12px">${tr('ഈ ദിവസം posts ഇല്ല', 'No posts on this day')}</div>`
   }`;
 }
 $('#calGrid').addEventListener('click', (e) => {
@@ -1318,7 +1320,7 @@ function renderIdeas() {
           </div>`,
         )
         .join('')
-    : '<div class="empty"><span class="big">💡</span>ആശയങ്ങൾ ഒന്നുമില്ല. മനസ്സിൽ വരുന്നത് ഇവിടെ എഴുതി വെക്കൂ.</div>';
+    : `<div class="empty"><span class="big">💡</span>${tr('ആശയങ്ങൾ ഒന്നുമില്ല. മനസ്സിൽ വരുന്നത് ഇവിടെ എഴുതി വെക്കൂ.', 'No ideas yet. Jot down whatever comes to mind.')}</div>`;
 }
 $('#ideaForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -1344,9 +1346,9 @@ $('#ideaList').addEventListener('click', async (e) => {
     caption.value = idea?.text || '';
     caption.dispatchEvent(new Event('input'));
     location.hash = '#create';
-    toast('Caption-ൽ ചേർത്തു. ഇനി video തിരഞ്ഞെടുക്കൂ');
+    toast(tr('Caption-ൽ ചേർത്തു. ഇനി video തിരഞ്ഞെടുക്കൂ', 'Added to the caption. Now choose a video'));
   } else if (del) {
-    const ok = await askConfirm({ icon: '💡', title: 'Idea delete ചെയ്യണോ?', text: 'ഈ ആശയം list-ൽ നിന്ന് മാറ്റും.' });
+    const ok = await askConfirm({ icon: '💡', title: tr('Idea delete ചെയ്യണോ?', 'Delete this idea?'), text: tr('ഈ ആശയം list-ൽ നിന്ന് മാറ്റും.', 'The idea is removed from the list.') });
     if (!ok) return;
     await apiFetch(`/api/ideas/${encodeURIComponent(del.dataset.delIdea)}/delete`, { method: 'POST' });
     ideas = ideas.filter((i) => i.id !== del.dataset.delIdea);
@@ -1374,7 +1376,7 @@ async function loadAnalytics(refresh = false) {
   </div>`;
   $('#statTiles').innerHTML = tile('youtube', data.totals.youtube) + tile('instagram', data.totals.instagram);
   const notes = [`Updated ${timeAgo(data.updatedAt)}`];
-  if (!data.instagramViews) notes.push('Instagram views കാണാൻ Instagram "Reconnect" ചെയ്യൂ');
+  if (!data.instagramViews) notes.push(tr('Instagram views കാണാൻ Instagram "Reconnect" ചെയ്യൂ', 'Reconnect Instagram to see Instagram views'));
   notes.push(...data.errors);
   $('#statsNote').textContent = notes.join(' · ');
 
@@ -1390,7 +1392,7 @@ async function loadAnalytics(refresh = false) {
     ? data.rows
         .map((r) => `<div class="srow"><div class="h"><b>${esc(r.title)}</b><small>${timeAgo(r.createdAt)}</small></div>${r.lines.map(line).join('')}</div>`)
         .join('')
-    : '<div class="empty"><span class="big">📊</span>Post ചെയ്തതിന് ശേഷം ഇവിടെ views, likes കാണാം</div>';
+    : `<div class="empty"><span class="big">📊</span>${tr('Post ചെയ്തതിന് ശേഷം ഇവിടെ views, likes കാണാം', 'Views and likes appear here after you post')}</div>`;
 }
 $('#statsRefresh').addEventListener('click', () => loadAnalytics(true));
 
@@ -1404,7 +1406,7 @@ async function loadCronInfo() {
 }
 $('#copyCron').addEventListener('click', async () => {
   await navigator.clipboard.writeText($('#cronUrl').value).catch(() => $('#cronUrl').select());
-  toast('Link copy ചെയ്തു ✓');
+  toast(tr('Link copy ചെയ്തു ✓', 'Link copied ✓'));
 });
 
 // ---------- navigation ----------

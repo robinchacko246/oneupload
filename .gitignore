@@ -4,3 +4,4 @@ data/
 uploads/
 .claude/settings.local.json
 *.log
+reviewer-account.txt
