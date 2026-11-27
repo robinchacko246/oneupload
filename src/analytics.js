@@ -1,7 +1,7 @@
 // Views / likes / comments for one user's posts, per connected channel.
 import * as db from './db.js';
 import { youtubeIdFromUrl, youtubeStats } from './youtube.js';
-import { instagramCanSeeViews, instagramPostStats, pageFromChannel } from './meta.js';
+import { instagramAccountReach, instagramCanSeeViews, instagramPostStats, pageFromChannel } from './meta.js';
 
 const CACHE_MS = 10 * 60 * 1000; // stats change slowly; keep API calls low
 const cache = new Map(); // userId -> { at, data }
@@ -53,6 +53,20 @@ export async function getAnalytics(userId, refresh = false) {
     ),
   );
 
+  // Instagram account reach (last 28 days), per connected account that granted insights.
+  const accounts = [];
+  await Promise.all(
+    Object.values(channels)
+      .filter((c) => c.platform === 'instagram' && instagramCanSeeViews(c))
+      .map(async (c) => {
+        try {
+          accounts.push({ channelId: c.id, name: c.username || c.name, reach28: await instagramAccountReach(pageFromChannel(c)) });
+        } catch (err) {
+          errors.push(`${c.username || c.name}: ${err.message}`);
+        }
+      }),
+  );
+
   const rows = posted
     .map((p) => {
       const lines = Object.entries(p.targets)
@@ -77,6 +91,7 @@ export async function getAnalytics(userId, refresh = false) {
     totals,
     instagramViews: channelRows.filter((c) => c.platform === 'instagram').some((c) => instagramCanSeeViews(c)),
     errors,
+    accounts,
     rows,
   };
   cache.set(userId, { at: Date.now(), data });

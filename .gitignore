@@ -5,3 +5,4 @@ uploads/
 .claude/settings.local.json
 *.log
 reviewer-account.txt
+review-screencast.mp4

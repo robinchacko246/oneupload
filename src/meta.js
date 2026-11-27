@@ -208,6 +208,32 @@ export async function instagramPostStats(page, mediaId) {
   return stats;
 }
 
+// Account reach over the last 28 days (instagram_manage_insights). Tries the newer
+// total_value form first, then the classic daily series, since Graph versions differ.
+export async function instagramAccountReach(page) {
+  const until = Math.floor(Date.now() / 1000);
+  const since = until - 28 * 24 * 3600;
+  const id = page.ig?.id;
+  if (!id) return null;
+  try {
+    const r = await graphGet(`/${id}/insights`, {
+      metric: 'reach',
+      period: 'day',
+      metric_type: 'total_value',
+      since,
+      until,
+      access_token: page.accessToken,
+    });
+    const v = r.data?.[0]?.total_value?.value;
+    if (v != null) return Number(v);
+  } catch {
+    /* fall back below */
+  }
+  const r = await graphGet(`/${id}/insights`, { metric: 'reach', period: 'day', since, until, access_token: page.accessToken });
+  const values = r.data?.[0]?.values || [];
+  return values.reduce((n, x) => n + (Number(x.value) || 0), 0);
+}
+
 // ---------------- Facebook ----------------
 
 async function facebookRegularVideo(page, { filePath, title, description }) {

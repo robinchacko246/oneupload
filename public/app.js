@@ -1374,7 +1374,12 @@ async function loadAnalytics(refresh = false) {
     <div class="th"><span class="pi ${PI_CLASS[p]}">${ICONS[p]}</span>${NAMES[p]}<small class="muted" style="margin-left:auto">${t.posts} posts</small></div>
     <div class="nums"><div><b>${num(p === 'instagram' && !data.instagramViews ? null : t.views)}</b><small>views</small></div><div><b>${num(t.likes)}</b><small>likes</small></div><div><b>${num(t.comments)}</b><small>comments</small></div></div>
   </div>`;
-  $('#statTiles').innerHTML = tile('youtube', data.totals.youtube) + tile('instagram', data.totals.instagram);
+  const reachTile = (a) => `<div class="tile">
+    <div class="th">${avatar({ platform: 'instagram', name: a.name, avatar: chanById(a.channelId)?.avatar }, 'sm')}${esc(a.name)}<small class="muted" style="margin-left:auto">${tr('കഴിഞ്ഞ 28 ദിവസം', 'last 28 days')}</small></div>
+    <div class="nums"><div><b>${num(a.reach28)}</b><small>${tr('reach (account)', 'account reach')}</small></div></div>
+  </div>`;
+  $('#statTiles').innerHTML =
+    tile('youtube', data.totals.youtube) + tile('instagram', data.totals.instagram) + (data.accounts || []).map(reachTile).join('');
   const notes = [`Updated ${timeAgo(data.updatedAt)}`];
   if (!data.instagramViews) notes.push(tr('Instagram views കാണാൻ Instagram "Reconnect" ചെയ്യൂ', 'Reconnect Instagram to see Instagram views'));
   notes.push(...data.errors);
