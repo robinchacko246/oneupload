@@ -4,16 +4,17 @@ const form = $('loginForm');
 const err = $('err');
 const go = $('go');
 
+let inviteNeeded = false;
 const mode = () => document.querySelector('input[name=authMode]:checked').value;
 
 function applyMode() {
   const register = mode() === 'register';
   $('name').hidden = !register;
-  $('invite').hidden = !register;
+  $('invite').hidden = !register || !inviteNeeded;
   $('password').autocomplete = register ? 'new-password' : 'current-password';
   $('password').placeholder = register ? t('Password (8+ അക്ഷരം)', 'Password (8+ characters)') : 'Password';
   go.textContent = register ? 'Create account' : 'Login';
-  $('hint').hidden = !register;
+  $('hint').hidden = !register || !$('hint').textContent;
   err.textContent = '';
 }
 
@@ -23,9 +24,12 @@ document.querySelectorAll('input[name=authMode]').forEach((r) => r.addEventListe
 fetch('/api/auth-info')
   .then((r) => r.json())
   .then((info) => {
+    inviteNeeded = Boolean(info.inviteRequired);
     $('hint').textContent = info.firstUser
-      ? t('ആദ്യത്തെ account ആണ് (owner). പഴയ app-ലെ channels-ഉം posts-ഉം ഇതിലേക്ക് മാറും. Invite code = പഴയ app password.', 'This is the first account (owner). Channels and posts from the old app move here. Invite code = the old app password.')
-      : t('Team-ലെ ആളുകൾക്ക് owner തരുന്ന invite code വേണം.', 'New accounts need the invite code from the owner.');
+      ? t('ആദ്യത്തെ account ആണ് (owner). പഴയ app-ലെ channels-ഉം posts-ഉം ഇതിലേക്ക് മാറും.', 'This is the first account (owner). Channels and posts from the old app move here.')
+      : inviteNeeded
+        ? t('Team-ലെ ആളുകൾക്ക് owner തരുന്ന invite code വേണം.', 'New accounts need the invite code from the owner.')
+        : '';
     if (info.firstUser) {
       document.querySelector('input[name=authMode][value=register]').checked = true;
     }

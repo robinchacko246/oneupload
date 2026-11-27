@@ -120,13 +120,15 @@ const asyncRoute = (fn) => (req, res) =>
   });
 
 const validEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || ''));
+// Sign-up is open to anyone. Set REQUIRE_INVITE=1 to require the invite code (APP_PASSWORD) again.
+const inviteRequired = () => process.env.REQUIRE_INVITE === '1' && Boolean(config.appPassword);
 const slow = () => new Promise((r) => setTimeout(r, 600)); // slows down password guessing
 
 app.get(
   '/api/auth-info',
   asyncRoute(async (req, res) => {
     const users = await db.countUsers();
-    res.json({ firstUser: users === 0, inviteRequired: Boolean(config.appPassword) });
+    res.json({ firstUser: users === 0, inviteRequired: inviteRequired() });
   }),
 );
 
@@ -134,7 +136,7 @@ app.post(
   '/api/register',
   asyncRoute(async (req, res) => {
     const { name = '', email = '', password = '', invite = '' } = req.body || {};
-    if (config.appPassword && !safeEqual(invite, config.appPassword)) {
+    if (inviteRequired() && !safeEqual(invite, config.appPassword)) {
       await slow();
       return res.status(403).json({ error: tr(req, 'Invite code തെറ്റാണ്', 'Wrong invite code') });
     }
@@ -172,7 +174,7 @@ app.post('/api/logout', (req, res) => {
 const OPEN_PATHS = new Set([
   '/login',
   '/login.html',
-  '/login.js',
+  '/login.js', '/i18n.js',
   '/style.css',
   '/favicon.svg',
   '/privacy.html',
