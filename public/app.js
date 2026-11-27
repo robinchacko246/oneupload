@@ -1414,6 +1414,51 @@ $('#copyCron').addEventListener('click', async () => {
   toast(tr('Link copy ചെയ്തു ✓', 'Link copied ✓'));
 });
 
+// ---------- Claude connector ----------
+function showConnector(hasKey, url = '') {
+  $('#connectorRow').hidden = !url;
+  $('#connectorUrl').value = url;
+  $('#revokeConnector').hidden = !hasKey;
+  $('#makeConnector').textContent = hasKey ? tr('പുതിയ link ഉണ്ടാക്കൂ', 'Create a new link') : tr('Connector link ഉണ്ടാക്കൂ', 'Create connector link');
+  $('#connectorNote').textContent = url
+    ? tr('ഈ link ഇപ്പോൾ മാത്രമേ കാണിക്കൂ. Copy ചെയ്ത് Claude-ൽ ചേർക്കൂ.', 'This link is shown only now. Copy it and add it in Claude.')
+    : hasKey
+      ? tr('Connector on ആണ് ✓ (link വീണ്ടും കാണിക്കില്ല; വേണമെങ്കിൽ പുതിയത് ഉണ്ടാക്കൂ)', 'Connector is on ✓ (the link is not shown again; create a new one if you need it)')
+      : '';
+}
+async function loadConnector() {
+  const info = await apiFetch('/api/connector').then((r) => r.json()).catch(() => ({}));
+  if (!$('#connectorUrl').value) showConnector(Boolean(info.hasKey));
+}
+$('#makeConnector').addEventListener('click', async () => {
+  if (!$('#revokeConnector').hidden) {
+    const ok = await askConfirm({
+      icon: '🔑',
+      title: tr('പുതിയ link ഉണ്ടാക്കണോ?', 'Create a new link?'),
+      text: tr('പഴയ link ഉടനെ പ്രവർത്തിക്കാതാവും. Claude-ൽ പുതിയ link ചേർക്കണം.', 'The old link stops working right away. You will need to add the new link in Claude.'),
+      yes: tr('ഉണ്ടാക്കൂ', 'Create'),
+    });
+    if (!ok) return;
+  }
+  const r = await apiFetch('/api/connector', { method: 'POST' }).then((x) => x.json());
+  if (r.url) showConnector(true, r.url);
+});
+$('#revokeConnector').addEventListener('click', async () => {
+  const ok = await askConfirm({
+    icon: '🔌',
+    title: tr('Connector off ചെയ്യണോ?', 'Turn the connector off?'),
+    text: tr('Claude-ന് ഇനി One Upload ഉപയോഗിക്കാൻ പറ്റില്ല.', 'Claude will no longer be able to use One Upload.'),
+    yes: tr('Off ചെയ്യൂ', 'Turn off'),
+  });
+  if (!ok) return;
+  await apiFetch('/api/connector/revoke', { method: 'POST' });
+  showConnector(false);
+});
+$('#copyConnector').addEventListener('click', async () => {
+  await navigator.clipboard.writeText($('#connectorUrl').value).catch(() => $('#connectorUrl').select());
+  toast(tr('Link copy ചെയ്തു ✓', 'Link copied ✓'));
+});
+
 // ---------- navigation ----------
 const VIEW_NAMES = ['create', 'queue', 'calendar', 'posted', 'ideas', 'analytics', 'channels'];
 function showView(name) {
@@ -1421,7 +1466,10 @@ function showView(name) {
   $$('.view').forEach((v) => (v.hidden = v.dataset.view !== name));
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === name));
   if (['queue', 'calendar', 'posted'].includes(name)) loadJobs();
-  if (name === 'channels') loadStatus().catch(() => {});
+  if (name === 'channels') {
+    loadStatus().catch(() => {});
+    loadConnector();
+  }
   if (name === 'calendar') renderCalendar();
   if (name === 'ideas') loadIdeas();
   if (name === 'analytics') loadAnalytics();

@@ -68,6 +68,9 @@ export function ensureSchema() {
         data text NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now()
       )`,
+      // Claude connector (MCP): sha256 of the user's connector key.
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_hash text',
+      'CREATE UNIQUE INDEX IF NOT EXISTS users_api_key ON users (api_key_hash)',
     ];
     for (const s of statements) await sql.query(s);
   })().catch((err) => {
@@ -81,7 +84,7 @@ const iso = (d) => (d ? new Date(d).toISOString() : null);
 
 // ---------------- users ----------------
 
-const userRow = (r) => r && { id: r.id, email: r.email, name: r.name, isOwner: r.is_owner, createdAt: iso(r.created_at), passwordHash: r.password_hash };
+const userRow = (r) => r && { id: r.id, email: r.email, name: r.name, isOwner: r.is_owner, createdAt: iso(r.created_at), passwordHash: r.password_hash, hasApiKey: Boolean(r.api_key_hash) };
 
 export async function countUsers() {
   const [r] = await q('SELECT count(*)::int AS n FROM users');
@@ -99,6 +102,15 @@ export async function createUser({ email, name, passwordHash, isOwner }) {
 export async function findUserByEmail(email) {
   const [r] = await q('SELECT * FROM users WHERE email = lower($1)', [email]);
   return userRow(r);
+}
+
+export async function findUserByApiKeyHash(hash) {
+  const [r] = await q('SELECT * FROM users WHERE api_key_hash = $1', [hash]);
+  return userRow(r);
+}
+
+export async function setApiKeyHash(userId, hash) {
+  await q('UPDATE users SET api_key_hash = $2 WHERE id = $1', [userId, hash]);
 }
 
 export async function getUser(id) {

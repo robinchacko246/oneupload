@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import express from 'express';
 import multer from 'multer';
-import { del as blobDel, get as blobGet, issueSignedToken, presignUrl } from '@vercel/blob';
+import { del as blobDel, get as blobGet, put as blobPut, issueSignedToken, presignUrl } from '@vercel/blob';
 import { handleUpload } from '@vercel/blob/client';
 import { waitUntil } from '@vercel/functions';
 import { config } from './config.js';
@@ -14,6 +14,7 @@ import * as db from './db.js';
 import { hashPassword, hmac, safeEqual, verifyPassword } from './secure.js';
 import { blobAccess, useBlob, withBlobAccess } from './store.js';
 import { getAnalytics } from './analytics.js';
+import { mcpHandler } from './mcp.js';
 import { migrateLegacyData } from './migrate.js';
 import {
   deleteYouTubeVideo,
@@ -116,7 +117,7 @@ app.use(express.json({ limit: '1mb' }));
 const asyncRoute = (fn) => (req, res) =>
   fn(req, res).catch((err) => {
     console.error(err);
-    if (!res.headersSent) res.status(500).json({ error: err.message });
+    if (!res.headersSent) res.status(err.status || 500).json({ error: err.message });
   });
 
 const validEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || ''));
@@ -170,6 +171,31 @@ app.post('/api/logout', (req, res) => {
   res.clearCookie(SESSION_COOKIE, { path: '/' });
   res.json({ ok: true });
 });
+
+// ---------- Claude connector (MCP) ----------
+// The connector URL is /mcp/<key>; the key is shown once and only its sha256 is stored.
+const keyHash = (key) => crypto.createHash('sha256').update(String(key)).digest('hex');
+
+async function mcpUser(req) {
+  const bearer = String(req.headers.authorization || '').match(/^Bearer\s+(\S+)/i)?.[1];
+  const key = req.params.key || bearer;
+  if (!key || !key.startsWith('ou_')) return null;
+  return (await db.findUserByApiKeyHash(keyHash(key)))?.id || null;
+}
+
+const mcpApi = {
+  listChannels: (userId) => db.listChannels(userId),
+  listPosts: async (userId) => (await db.listPosts(userId, 200)).map(publicPost),
+  getPost: async (userId, id) => {
+    const p = liveJobs.get(id) || (await db.getPost(userId, id));
+    return p && p.userId === userId ? publicPost(p) : null;
+  },
+  editPost: (userId, id, change) => editPost(userId, id, change),
+  removePost: (userId, id) => removePost(userId, id),
+  analytics: (userId, refresh) => getAnalytics(userId, refresh),
+  createPostFromUrls,
+};
+app.all(['/mcp', '/mcp/:key'], mcpHandler(mcpApi, mcpUser));
 
 const OPEN_PATHS = new Set([
   '/login',
@@ -495,14 +521,15 @@ function inputFromPost(post) {
   };
 }
 
-async function startPost(req, res, fields, source, fileName, mediaKinds = []) {
+// Creates a post. "now" posts start publishing in the background; the others wait as draft / scheduled.
+async function createPost(userId, fields, source, fileName, mediaKinds = []) {
   const later = fields.mode !== 'now';
   const state = later ? stateFor(fields.mode) : 'pending';
-  const targets = await buildTargets(req.userId, fields, state);
+  const targets = await buildTargets(userId, fields, state);
   const problem = checkScheduleTime(fields) || checkMedia(fields.type, targets, mediaKinds);
   if (problem) throw httpError(400, problem);
   const post = await db.createPost({
-    userId: req.userId,
+    userId,
     status: later ? state : 'posting',
     scheduledAt: fields.mode === 'schedule' ? fields.scheduledAt.toISOString() : null,
     type: fields.type,
@@ -512,11 +539,17 @@ async function startPost(req, res, fields, source, fileName, mediaKinds = []) {
     targets,
     mediaSource: later ? source : null, // the video waits in storage until it is posted
   });
-  if (later) return res.json(publicPost(post));
-  liveJobs.set(post.id, post);
-  res.json({ jobId: post.id });
-  // waitUntil keeps the work going on Vercel after the reply has been sent.
-  waitUntil(runPost(post, inputFromPost(post), source));
+  if (!later) {
+    liveJobs.set(post.id, post);
+    // waitUntil keeps the work going on Vercel after the reply has been sent.
+    waitUntil(runPost(post, inputFromPost(post), source));
+  }
+  return post;
+}
+
+async function startPost(req, res, fields, source, fileName, mediaKinds = []) {
+  const post = await createPost(req.userId, fields, source, fileName, mediaKinds);
+  res.json(post.status === 'posting' ? { jobId: post.id } : publicPost(post));
 }
 
 const isBlobUrl = (u) => {
@@ -794,26 +827,166 @@ app.post(
 app.post(
   '/api/jobs/:id/remove',
   asyncRoute(async (req, res) => {
-    if (liveJobs.has(req.params.id)) return res.status(400).json({ error: 'Upload is still running' });
-    const post = await db.getPost(req.userId, req.params.id);
-    if (!post) return res.json({ ok: false });
-    await deleteSourceVideo(post.retrySource);
-    await deleteSourceVideo(post.mediaSource);
-    await db.deletePost(req.userId, post.id);
+    res.json({ ok: await removePost(req.userId, req.params.id) });
+  }),
+);
+
+// ---------- posts from media links (Claude connector) ----------
+
+// Share links -> direct download links.
+function directMediaUrl(raw) {
+  let u;
+  try {
+    u = new URL(String(raw).trim());
+  } catch {
+    throw httpError(400, `Not a valid link: ${raw}`);
+  }
+  if (!['http:', 'https:'].includes(u.protocol)) throw httpError(400, 'Only http(s) links are supported');
+  const driveId =
+    (u.hostname === 'drive.google.com' && (u.pathname.match(/\/file\/d\/([^/]+)/)?.[1] || u.searchParams.get('id'))) || null;
+  if (driveId) return `https://drive.usercontent.google.com/download?id=${encodeURIComponent(driveId)}&export=download&confirm=t`;
+  if (/(^|\.)dropbox\.com$/.test(u.hostname)) {
+    u.searchParams.delete('dl');
+    u.searchParams.set('raw', '1');
+  }
+  return u.toString();
+}
+
+const EXT_TYPES = { '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.m4v': 'video/mp4', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
+
+// Downloads one link into our storage (Blob on Vercel, the uploads folder locally).
+async function importMedia(link) {
+  const url = directMediaUrl(link);
+  const res = await fetch(url, { redirect: 'follow', headers: { 'user-agent': 'OneUpload/1.0' } });
+  if (!res.ok || !res.body) throw httpError(400, `Could not download ${link} (HTTP ${res.status})`);
+  const nameFromHeader = res.headers.get('content-disposition')?.match(/filename\*?=(?:UTF-8'')?"?([^";]+)/i)?.[1];
+  const fileName = decodeURIComponent(nameFromHeader || path.basename(new URL(url).pathname) || 'media');
+  let type = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (!/^(video|image)\//.test(type)) type = EXT_TYPES[path.extname(fileName).toLowerCase()] || type;
+  if (!/^(video|image)\//.test(type)) {
+    throw httpError(400, `${link} is not a video or photo (${type || 'unknown type'}). Use a direct link, or a Google Drive link shared with "Anyone with the link".`);
+  }
+  const size = Number(res.headers.get('content-length') || 0);
+  if (size > MAX_VIDEO_BYTES) throw httpError(400, `${fileName} is bigger than 300 MB`);
+
+  // Count bytes as they stream, and stop at the limit.
+  let seen = 0;
+  const limited = res.body.pipeThrough(
+    new TransformStream({
+      transform(chunk, ctl) {
+        seen += chunk.byteLength;
+        if (seen > MAX_VIDEO_BYTES) ctl.error(httpError(400, `${fileName} is bigger than 300 MB`));
+        else ctl.enqueue(chunk);
+      },
+    }),
+  );
+  const ext = path.extname(fileName).toLowerCase() || (type.startsWith('video/') ? '.mp4' : '.jpg');
+  const media = type.startsWith('video/') ? 'video' : 'image';
+  const stored = `${crypto.randomBytes(8).toString('hex')}${ext}`;
+  if (useBlob) {
+    const blob = await withBlobAccess((access) =>
+      blobPut(`uploads/link-${stored}`, limited, { access, contentType: type, addRandomSuffix: true, multipart: true }),
+    );
+    return { kind: 'blob', url: blob.url, media, name: fileName };
+  }
+  const dest = path.join(config.paths.uploads, stored);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  await pipeline(Readable.fromWeb(limited), fs.createWriteStream(dest));
+  return { kind: 'file', path: dest, name: stored, media, fileName };
+}
+
+async function createPostFromUrls(userId, o) {
+  const links = (o.mediaUrls || []).slice(0, 10);
+  if (!links.length) throw httpError(400, 'Give at least one media link');
+  // Check the channels before downloading anything.
+  const own = new Set((await db.listChannels(userId)).map((c) => c.id));
+  const unknown = (o.channelIds || []).filter((id) => !own.has(id));
+  if (!o.channelIds?.length || unknown.length) {
+    throw httpError(400, unknown.length ? `Unknown channel id(s): ${unknown.join(', ')}. Use list_channels.` : 'Select at least one channel');
+  }
+  const items = [];
+  try {
+    for (const link of links) items.push(await importMedia(link));
+    const videos = items.filter((i) => i.media === 'video');
+    let type = o.type;
+    if (!type) type = items.length > 1 ? 'carousel' : videos.length ? 'reel' : 'photo';
+    if (!PHOTO_TYPES.has(type) && (items.length !== 1 || !videos.length)) {
+      throw httpError(400, 'A Reel / video post needs exactly one video link');
+    }
+    if (type === 'photo' && items.length > 1) type = 'carousel';
+    const fields = readFields({
+      channels: o.channelIds,
+      type,
+      caption: o.caption,
+      ytTitle: o.ytTitle,
+      privacy: o.privacy,
+      mode: o.mode,
+      scheduledAt: o.scheduledAt,
+    });
+    const displayName = items.length > 1 ? `${items.length} items` : items[0].fileName || items[0].name;
+    const source = PHOTO_TYPES.has(type) ? { kind: 'multi', items } : items[0];
+    return publicPost(await createPost(userId, fields, source, displayName, items.map((i) => i.media)));
+  } catch (err) {
+    // Nothing was created: remove what was already downloaded.
+    await Promise.all(items.map((i) => deleteSourceVideo(i)));
+    throw err;
+  }
+}
+
+// ---------- connector key (Settings) ----------
+
+app.get(
+  '/api/connector',
+  asyncRoute(async (req, res) => {
+    const user = await db.getUser(req.userId);
+    res.json({ hasKey: Boolean(user?.hasApiKey) });
+  }),
+);
+
+// Makes a new connector link (the old one stops working). The key is shown only now.
+app.post(
+  '/api/connector',
+  asyncRoute(async (req, res) => {
+    const key = `ou_${crypto.randomBytes(24).toString('base64url')}`;
+    await db.setApiKeyHash(req.userId, keyHash(key));
+    res.json({ url: `${config.baseUrl}/mcp/${key}` });
+  }),
+);
+
+app.post(
+  '/api/connector/revoke',
+  asyncRoute(async (req, res) => {
+    await db.setApiKeyHash(req.userId, null);
     res.json({ ok: true });
   }),
 );
+
+// Removes a post from the list and deletes its stored media (published posts stay on the platforms).
+async function removePost(userId, id) {
+  if (liveJobs.has(id)) throw httpError(400, 'Upload is still running');
+  const post = await db.getPost(userId, id);
+  if (!post) return false;
+  await deleteSourceVideo(post.retrySource);
+  await deleteSourceVideo(post.mediaSource);
+  await db.deletePost(userId, post.id);
+  return true;
+}
 
 // ---------- drafts & scheduled posts ----------
 
 app.post(
   '/api/jobs/:id/edit',
   asyncRoute(async (req, res) => {
-    const post = await db.getPost(req.userId, req.params.id);
+    res.json(await editPost(req.userId, req.params.id, req.body || {}));
+  }),
+);
+
+// Changes a draft / scheduled post; b holds only the fields to change.
+async function editPost(userId, id, b) {
+    const post = await db.getPost(userId, id);
     if (!post || !['draft', 'scheduled'].includes(post.status)) {
-      return res.status(400).json({ error: 'Only drafts and scheduled posts can be edited' });
+      throw httpError(400, 'Only drafts and scheduled posts can be edited');
     }
-    const b = req.body || {};
     const fields = readFields({
       channels: b.channels ?? Object.keys(post.targets).join(','),
       type: post.type,
@@ -827,22 +1000,17 @@ app.post(
     });
     if (fields.mode === 'now') fields.mode = 'draft';
     const state = stateFor(fields.mode);
-    try {
-      post.targets = await buildTargets(req.userId, fields, state);
-    } catch (err) {
-      return sendError(res, err);
-    }
+    post.targets = await buildTargets(userId, fields, state);
     const kinds = (post.mediaSource?.items || []).map((i) => i.media);
     const problem = checkScheduleTime(fields) || (isPhotoPost(post) ? checkMedia(post.type, post.targets, kinds) : null);
-    if (problem) return res.status(400).json({ error: problem });
+    if (problem) throw httpError(400, problem);
     post.caption = fields.caption;
     post.status = state;
     post.scheduledAt = fields.mode === 'schedule' ? fields.scheduledAt.toISOString() : null;
     post.input = { ytTitle: fields.ytTitle, ytDescription: fields.ytDescription, tags: fields.tags, privacy: fields.privacy };
     post.claimedAt = null;
-    res.json(publicPost(await db.savePost(post)));
-  }),
-);
+    return publicPost(await db.savePost(post));
+}
 
 async function runClaimed(post) {
   for (const k of Object.keys(post.targets)) post.targets[k] = { ...post.targets[k], state: 'pending', message: 'Waiting' };

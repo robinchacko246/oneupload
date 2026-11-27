@@ -246,6 +246,21 @@
       <div class="card-title"><h2>Your channels</h2><span class="ml">ചേർത്ത channels</span></div>
       <div id="channelList" class="channel-list"></div>
     </section>
+    <section class="card connector-card">
+      <div class="card-title"><h2>Claude connector</h2><span class="ml">Claude-ൽ നിന്ന് post ചെയ്യാൻ</span></div>
+      <p class="muted" data-en="Connect One Upload to Claude, then just ask: “Schedule this reel on Nala Restaurant’s Instagram tomorrow at 7 pm”. Claude can list your channels, create and schedule posts from video / photo links, change or cancel scheduled posts and read analytics.">One Upload Claude-മായി connect ചെയ്താൽ, “നാളെ 7 മണിക്ക് Nala Restaurant-ന്റെ Instagram-ൽ ഈ reel schedule ചെയ്യ്” എന്ന് Claude-നോട് പറഞ്ഞാൽ മതി. Channels കാണാനും, video / photo link-ൽ നിന്ന് post ഉണ്ടാക്കാനും schedule ചെയ്യാനും, schedule മാറ്റാനും cancel ചെയ്യാനും, analytics കാണാനും Claude-ന് പറ്റും.</p>
+      <div class="copy-row" id="connectorRow" hidden><input class="text" id="connectorUrl" readonly /><button class="btn small" id="copyConnector">Copy</button></div>
+      <p class="muted" id="connectorNote"></p>
+      <div class="connector-actions">
+        <button class="btn" id="makeConnector" data-en="Create connector link">Connector link ഉണ്ടാക്കൂ</button>
+        <button class="btn ghost" id="revokeConnector" hidden data-en="Turn off">Off ചെയ്യൂ</button>
+      </div>
+      <ol class="muted connector-steps">
+        <li data-en="In Claude: Settings → Connectors → <b>Add custom connector</b>.">Claude-ൽ: Settings → Connectors → <b>Add custom connector</b>.</li>
+        <li data-en="Name: <b>One Upload</b> · URL: paste the link above → <b>Add</b>.">Name: <b>One Upload</b> · URL: മുകളിലെ link paste ചെയ്യൂ → <b>Add</b>.</li>
+        <li data-en="Treat the link like a password. Creating a new link turns the old one off.">ഈ link password പോലെയാണ്. പുതിയ link ഉണ്ടാക്കിയാൽ പഴയത് പ്രവർത്തിക്കില്ല.</li>
+      </ol>
+    </section>
   </main>
 
   <!-- choose which Instagram accounts / Pages to add after a Facebook login -->
