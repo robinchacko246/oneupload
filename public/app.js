@@ -1071,6 +1071,18 @@ const ST_LABEL = { scheduled: 'Scheduled', draft: 'Draft', posting: 'Posting…'
 const EDIT_ICON =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4"/></svg>';
 
+// Small preview of the photo/video a post will publish (stored media, via the server).
+function mediaInner(j) {
+  const src = api(`/api/jobs/${encodeURIComponent(j.id)}/media`);
+  return j.preview.kind === 'image'
+    ? `<img src="${src}" alt="" loading="lazy" />`
+    : `<video src="${src}#t=0.5" muted playsinline preload="metadata"></video><span class="vb">▶</span>`;
+}
+function mediaThumb(j) {
+  if (!j.preview) return `<span class="qthumb empty">${j.type === 'photo' || j.type === 'carousel' ? '🖼️' : '🎬'}</span>`;
+  return `<span class="qthumb ${j.type === 'story' ? 'tall' : ''}">${mediaInner(j)}${j.preview.count > 1 ? `<span class="qn">${j.preview.count}</span>` : ''}</span>`;
+}
+
 function plannedItem(j, { showDay = false } = {}) {
   const isDraft = j.status === 'draft';
   const overdue = j.status === 'scheduled' && new Date(j.scheduledAt) < new Date();
@@ -1079,6 +1091,7 @@ function plannedItem(j, { showDay = false } = {}) {
     : `<b>${fmtTime(j.scheduledAt)}</b><small>${showDay ? dayLabel(new Date(j.scheduledAt)) : overdue ? 'due now' : ''}</small>`;
   return `<div class="qitem ${overdue ? 'overdue' : ''}">
     <div class="time">${time}</div>
+    ${mediaThumb(j)}
     <div class="body">
       <b>${esc(titleOf(j))}</b>
       <div class="plats">${platIcons(j)}<span class="st ${j.status}">${ST_LABEL[j.status]}</span><small class="muted">${typeLabel(j)}</small></div>
@@ -1531,6 +1544,7 @@ function postCard(j, c, mode) {
   const t = targetOf(j, c.id) || {};
   const line = mode === 'sent' ? statLine(j.id, c.id) : null;
   const thumb = line?.thumb || (c.platform === 'youtube' ? ytThumb(t.url) : null);
+  const stored = !thumb && j.preview ? mediaInner(j) : '';
   const others = Object.entries(j.platforms || {}).filter(([k]) => k !== c.id);
   const photo = j.type === 'photo' || j.type === 'carousel';
   const overdue = j.status === 'scheduled' && new Date(j.scheduledAt) < new Date();
@@ -1569,7 +1583,7 @@ function postCard(j, c, mode) {
         <p class="cap">${esc(j.caption || j.fileName || '')}</p>
         ${others.length ? `<div class="others">${tr('ഇവിടെയും:', 'Also on:')} ${others.map(([k, o]) => targetAvatar(k, o)).join('')}</div>` : ''}
       </div>
-      <div class="thumb">${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : photo ? '🖼️' : '🎬'}</div>
+      <div class="thumb ${j.type === 'story' ? 'tall' : ''}">${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : stored || (photo ? '🖼️' : '🎬')}</div>
     </div>
     ${stats}
     <div class="pfoot"><span class="info ${t.state === 'error' && mode === 'sent' ? 'err' : ''}">${info}</span>${acts}</div>

@@ -754,6 +754,18 @@ async function runPost(post, input, source, only = null) {
 }
 
 // What the browser sees of a post (no storage links). `platforms` maps channel id -> target.
+// The first photo/video of a post that is not out yet (or kept for a retry), for thumbnails.
+function firstMedia(p) {
+  const src = p.mediaSource || p.retrySource;
+  if (!src) return null;
+  if (src.kind === 'multi') return src.items?.[0] || null;
+  return { ...src, media: src.media || 'video' };
+}
+function previewOf(p) {
+  const m = firstMedia(p);
+  return m ? { kind: m.media === 'image' ? 'image' : 'video', count: p.mediaSource?.items?.length || p.retrySource?.items?.length || 1 } : null;
+}
+
 function publicPost(p) {
   const keptMs = p.retrySource?.keptAt ? Date.now() - new Date(p.retrySource.keptAt).getTime() : Infinity;
   const i = p.input || {};
@@ -768,10 +780,25 @@ function publicPost(p) {
     fileName: p.fileName,
     platforms: p.targets,
     hasVideo: Boolean(p.mediaSource),
+    preview: previewOf(p),
     settings: { ytTitle: i.ytTitle || '', ytDescription: i.ytDescription || '', tags: i.tags || [], privacy: i.privacy || 'public' },
     canRetry: keptMs < 24 * 60 * 60 * 1000,
   };
 }
+
+// Thumbnail source: sends the browser to a short-lived link to the stored photo/video.
+app.get(
+  '/api/jobs/:id/media',
+  asyncRoute(async (req, res) => {
+    const post = await db.getPost(req.userId, req.params.id);
+    const m = post && firstMedia(post);
+    if (!m) return res.status(404).end();
+    res.set('Cache-Control', 'private, max-age=3000');
+    if (m.kind === 'blob') return res.redirect(302, await signedBlobUrl(m.url));
+    if (m.kind === 'file' && m.path && fs.existsSync(m.path)) return res.sendFile(path.resolve(m.path));
+    res.status(404).end();
+  }),
+);
 
 app.get(
   '/api/jobs',

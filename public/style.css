@@ -1166,3 +1166,14 @@ textarea, input.text, select.text { background: #1a1a1a; }
 @media (max-width: 520px) { .segmented.four { grid-template-columns: repeat(2, 1fr); } }
 .story-note { margin: 6px 0 0; font-size: 12.5px; }
 .chpick input:disabled ~ .tick { display: none; }
+
+/* media previews in Queue / Drafts / channel cards */
+.qitem { grid-template-columns: 64px auto minmax(0, 1fr) auto; }
+.qthumb { position: relative; width: 64px; height: 64px; border-radius: 10px; overflow: hidden; background: #2a2a2a; display: grid; place-items: center; font-size: 22px; flex: none; }
+.qthumb.tall { width: 54px; height: 96px; }
+.qthumb img, .qthumb video, .pcard .thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.qthumb .vb, .pcard .thumb .vb { position: absolute; inset: auto 4px 4px auto; font-size: 10px; background: rgba(0, 0, 0, 0.6); color: #fff; border-radius: 6px; padding: 1px 5px; }
+.pcard .thumb { position: relative; }
+.pcard .thumb.tall { aspect-ratio: 9 / 16; width: 110px; }
+.qthumb .qn { position: absolute; top: 4px; right: 4px; font-size: 11px; font-weight: 700; background: rgba(0, 0, 0, 0.65); color: #fff; border-radius: 6px; padding: 0 5px; }
+@media (max-width: 640px) { .qitem { grid-template-columns: 56px auto minmax(0, 1fr); } .qitem .acts { grid-column: 1 / -1; } }
