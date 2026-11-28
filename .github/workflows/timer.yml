@@ -1,0 +1,15 @@
+# Publishes scheduled One Upload posts on time: calls the app every 5 minutes.
+# (GitHub may start scheduled runs a few minutes late when it is busy.)
+name: Post timer
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+permissions: {}
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Run due posts
+        run: curl -fsS --max-time 60 https://oneupload-omega.vercel.app/api/tick

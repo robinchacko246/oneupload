@@ -209,6 +209,7 @@ const OPEN_PATHS = new Set([
   '/data-deletion.html',
   '/app-icon.png',
   '/api/cron',
+  '/api/tick',
   '/api/auth-info',
 ]);
 
@@ -1056,6 +1057,18 @@ app.all(
   '/api/cron',
   asyncRoute(async (req, res) => {
     if (!safeEqual(String(req.query.key || ''), cronKey())) return res.status(403).json({ error: 'Bad key' });
+    res.json({ ok: true, started: await runDuePosts() });
+  }),
+);
+
+// Keyless timer for the GitHub Actions schedule (.github/workflows/timer.yml). It only publishes
+// posts whose time has already come, which any app visit does too, and runs at most once a minute.
+let lastTick = 0;
+app.all(
+  '/api/tick',
+  asyncRoute(async (req, res) => {
+    if (Date.now() - lastTick < 60_000) return res.json({ ok: true, skipped: true });
+    lastTick = Date.now();
     res.json({ ok: true, started: await runDuePosts() });
   }),
 );
