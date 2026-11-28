@@ -36,6 +36,7 @@ import {
   pageFromChannel,
   publishFacebookPhotos,
   publishInstagramMedia,
+  publishInstagramStory,
   uploadToFacebook,
   uploadToInstagram,
 } from './meta.js';
@@ -449,7 +450,9 @@ const upload = multer({
 });
 
 const PHOTO_TYPES = new Set(['photo', 'carousel']);
-const isPhotoPost = (post) => PHOTO_TYPES.has(post.type);
+// Types whose media is a list of items (photos / carousel / story) instead of one video.
+const MULTI_TYPES = new Set(['photo', 'carousel', 'story']);
+const isPhotoPost = (post) => MULTI_TYPES.has(post.type);
 
 function readFields(b) {
   const caption = String(b.caption || '');
@@ -457,7 +460,7 @@ function readFields(b) {
     channelIds: (Array.isArray(b.channels) ? b.channels : String(b.channels || '').split(','))
       .map((s) => String(s).trim())
       .filter(Boolean),
-    type: ['video', 'photo', 'carousel'].includes(b.type) ? b.type : 'reel',
+    type: ['video', 'photo', 'carousel', 'story'].includes(b.type) ? b.type : 'reel',
     caption,
     ytTitle: String(b.ytTitle || '').trim(),
     // Empty = use the caption (worked out when posting, so caption edits carry over).
@@ -499,8 +502,13 @@ function httpError(status, message) {
 
 // Photo / carousel posts: YouTube can't take them, and need 1–10 items.
 function checkMedia(type, targets, kinds) {
-  if (!PHOTO_TYPES.has(type)) return null;
   const platforms = Object.values(targets).map((t) => t.platform);
+  if (type === 'story') {
+    if (kinds.length !== 1) return 'A story needs exactly one photo or video';
+    if (platforms.some((p) => p !== 'instagram')) return 'Stories go to Instagram only. Untick the other channels.';
+    return null;
+  }
+  if (!PHOTO_TYPES.has(type)) return null;
   if (!kinds.length) return 'Add at least one photo';
   if (kinds.length > 10) return 'A carousel can have at most 10 items';
   if (platforms.includes('youtube')) return 'YouTube does not accept photo posts. Untick the YouTube channels.';
@@ -598,7 +606,7 @@ app.post('/api/upload', (req, res) => {
       cleanup();
       sendError(res, e);
     };
-    if (PHOTO_TYPES.has(fields.type)) {
+    if (MULTI_TYPES.has(fields.type)) {
       const files = req.files?.media || [];
       const items = files.map((f) => ({ kind: 'file', path: f.path, name: f.filename, media: f.mimetype.startsWith('video/') ? 'video' : 'image' }));
       const name = files.length > 1 ? `${files.length} items` : files[0]?.originalname || 'photo.jpg';
@@ -695,6 +703,10 @@ async function runPost(post, input, source, only = null) {
         );
       }
       const page = pageFromChannel(ch);
+      if (post.type === 'story') {
+        if (ch.platform !== 'instagram' || !items?.length) throw new Error('Stories go to Instagram only');
+        return publishInstagramStory(page, items[0], status);
+      }
       if (ch.platform === 'instagram') {
         if (items) return publishInstagramMedia(page, { items, caption: input.caption }, status);
         return uploadToInstagram(page, { filePath, caption: input.caption, publicVideoUrl: videoUrl }, status);
@@ -910,7 +922,8 @@ async function createPostFromUrls(userId, o) {
     const videos = items.filter((i) => i.media === 'video');
     let type = o.type;
     if (!type) type = items.length > 1 ? 'carousel' : videos.length ? 'reel' : 'photo';
-    if (!PHOTO_TYPES.has(type) && (items.length !== 1 || !videos.length)) {
+    if (type === 'story' && items.length !== 1) throw httpError(400, 'A story needs exactly one photo or video link');
+    if (!MULTI_TYPES.has(type) && (items.length !== 1 || !videos.length)) {
       throw httpError(400, 'A Reel / video post needs exactly one video link');
     }
     if (type === 'photo' && items.length > 1) type = 'carousel';
@@ -924,7 +937,7 @@ async function createPostFromUrls(userId, o) {
       scheduledAt: o.scheduledAt,
     });
     const displayName = items.length > 1 ? `${items.length} items` : items[0].fileName || items[0].name;
-    const source = PHOTO_TYPES.has(type) ? { kind: 'multi', items } : items[0];
+    const source = MULTI_TYPES.has(type) ? { kind: 'multi', items } : items[0];
     return publicPost(await createPost(userId, fields, source, displayName, items.map((i) => i.media)));
   } catch (err) {
     // Nothing was created: remove what was already downloaded.

@@ -140,7 +140,7 @@ function renderChannelPicker() {
       </label>`;
     })
     .join('');
-  if (photoMode()) setPhotoUi(true);
+  setPhotoUi(photoMode());
   updatePickedCount();
 }
 
@@ -295,20 +295,32 @@ function takeFiles(files) {
 }
 
 // Photo posts can't go to YouTube, so its tile is switched off while photos are picked.
+const typeRadio = (v) => document.querySelector(`input[name=type][value=${v}]`);
+const isStory = () => typeRadio('story').checked;
 function setPhotoUi(on) {
-  // YouTube channels can't take photo posts: switch them off while photos are picked.
-  $$('input[name=channels][data-platform=youtube]').forEach((i) => {
-    i.disabled = on;
-    i.closest('.chpick').title = on ? tr('YouTube photo posts സ്വീകരിക്കില്ല', 'YouTube does not accept photo posts') : channelLabel(chanById(i.value) || {});
+  // Story: one photo or video, Instagram only.
+  typeRadio('story').disabled = picked.length > 1;
+  if (isStory() && picked.length > 1) typeRadio('photo').checked = true;
+  const story = isStory();
+  typeRadio('photo').disabled = !on;
+  ['reel', 'video'].forEach((v) => (typeRadio(v).disabled = on));
+  if (on && !story) typeRadio('photo').checked = true;
+  else if (!on && typeRadio('photo').checked) typeRadio('reel').checked = true;
+  // Channels that can't take this post are switched off.
+  $$('input[name=channels]').forEach((i) => {
+    const p = i.dataset.platform;
+    const off = story ? p !== 'instagram' : on && p === 'youtube';
+    i.disabled = off;
+    i.closest('.chpick').title = !off
+      ? channelLabel(chanById(i.value) || {})
+      : story
+        ? tr('Story Instagram-ൽ മാത്രം', 'Stories go to Instagram only')
+        : tr('YouTube photo posts സ്വീകരിക്കില്ല', 'YouTube does not accept photo posts');
   });
+  $('#storyNote').hidden = !story;
   updatePickedCount?.();
-  document.querySelector('input[name=type][value=photo]').disabled = !on;
-  $$('input[name=type]:not([value=photo])').forEach((r) => (r.disabled = on));
-  if (on) document.querySelector('input[name=type][value=photo]').checked = true;
-  else if (document.querySelector('input[name=type][value=photo]').checked) {
-    document.querySelector('input[name=type][value=reel]').checked = true;
-  }
 }
+$$('input[name=type]').forEach((r) => r.addEventListener('change', () => setPhotoUi(photoMode())));
 
 function renderPicked() {
   thumbUrls.forEach((u) => URL.revokeObjectURL(u));
@@ -582,7 +594,7 @@ async function postUpload(body) {
 
 // Instagram only takes JPEG photos with a width:height ratio between 4:5 and 1.91:1,
 // so photos are converted (and centre-cropped if needed) in the browser first.
-async function toInstagramJpeg(file) {
+async function toInstagramJpeg(file, crop = true) {
   let bitmap;
   try {
     bitmap = await createImageBitmap(file);
@@ -594,7 +606,9 @@ async function toInstagramJpeg(file) {
   let sw = bitmap.width;
   let sh = bitmap.height;
   const ratio = sw / sh;
-  if (ratio < 0.8) {
+  if (!crop) {
+    /* stories keep their own shape (usually 9:16) */
+  } else if (ratio < 0.8) {
     sh = Math.round(sw / 0.8);
     sy = Math.round((bitmap.height - sh) / 2);
   } else if (ratio > 1.91) {
@@ -612,9 +626,9 @@ async function toInstagramJpeg(file) {
 }
 
 // Photo / carousel post: send each file, then tell the server the list.
-async function sendMedia(files, data, onProgress) {
+async function sendMedia(files, data, onProgress, crop = true) {
   const prepared = [];
-  for (const f of files) prepared.push(isImage(f) ? await toInstagramJpeg(f) : f);
+  for (const f of files) prepared.push(isImage(f) ? await toInstagramJpeg(f, crop) : f);
   const total = prepared.reduce((n, f) => n + f.size, 0) || 1;
   if (!status.blobUploads) {
     data.delete('video');
@@ -652,6 +666,8 @@ $('#form').addEventListener('submit', async (e) => {
     setTimeout(() => drop.classList.remove('over'), 600);
     return;
   }
+  const story = isStory();
+  if (story && picked.length !== 1) return toast(tr('Story-ക്ക് ഒരു photo അല്ലെങ്കിൽ video മാത്രം', 'A story takes exactly one photo or video'), true);
   const photos = photoMode();
   const file = picked[0];
   const totalSize = picked.reduce((n, f) => n + f.size, 0);
@@ -676,7 +692,8 @@ $('#form').addEventListener('submit', async (e) => {
   data.set('channels', chosen.map((c) => c.id).join(','));
   data.set('mode', mode);
   if (scheduledAt) data.set('scheduledAt', scheduledAt);
-  if (photos) data.set('type', picked.length > 1 ? 'carousel' : 'photo');
+  if (story) data.set('type', 'story');
+  else if (photos) data.set('type', picked.length > 1 ? 'carousel' : 'photo');
   else data.set('video', file);
 
   const submit = $('#submit');
@@ -685,7 +702,9 @@ $('#form').addEventListener('submit', async (e) => {
   const onProgress = (pct) =>
     overlay.progress(pct, 'Uploading…', `${mb((totalSize * pct) / 100)} / ${mb(totalSize)}`);
   try {
-    const result = photos
+    const result = story
+      ? await sendMedia(picked, data, onProgress, false)
+      : photos
       ? await sendMedia(picked, data, onProgress)
       : status.blobUploads
         ? await sendViaBlob(file, data, onProgress)
@@ -1163,7 +1182,7 @@ function openEditor(job) {
     ? channels
         .map(
           (c) => `<label class="chpick" title="${esc(channelLabel(c))}">
-            <input type="checkbox" value="${esc(c.id)}" ${job.platforms?.[c.id] ? 'checked' : ''} ${photo && c.platform === 'youtube' ? 'disabled' : ''} />
+            <input type="checkbox" value="${esc(c.id)}" ${job.platforms?.[c.id] ? 'checked' : ''} ${(job.type === 'story' ? c.platform !== 'instagram' : photo && c.platform === 'youtube') ? 'disabled' : ''} />
             ${avatar(c)}<span class="tick">✓</span><small>${esc(channelLabel(c))}</small></label>`,
         )
         .join('')
@@ -1713,5 +1732,5 @@ loadJobs();
 
 
 function typeLabel(j) {
-  return { reel: 'Reel', video: 'Video', photo: 'Photo', carousel: 'Carousel' }[j.type] || 'Video';
+  return { reel: 'Reel', video: 'Video', photo: 'Photo', carousel: 'Carousel', story: 'Story' }[j.type] || 'Video';
 }

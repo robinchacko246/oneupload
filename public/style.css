@@ -1162,3 +1162,7 @@ body { background: var(--bg); }
 .drop { background: #1b1b1b; }
 textarea, input.text, select.text { background: #1a1a1a; }
 .overlay .stage { background: #1f1f1f; }
+.segmented.four { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 520px) { .segmented.four { grid-template-columns: repeat(2, 1fr); } }
+.story-note { margin: 6px 0 0; font-size: 12.5px; }
+.chpick input:disabled ~ .tick { display: none; }

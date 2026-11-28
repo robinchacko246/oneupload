@@ -12,7 +12,7 @@ export async function getAnalytics(userId, refresh = false) {
 
   const [posts, channelRows] = await Promise.all([db.listPosts(userId, 200), db.listChannels(userId)]);
   const channels = Object.fromEntries(channelRows.map((c) => [c.id, db.withSecret(c)]));
-  const posted = posts.filter((p) => p.status === 'posted').slice(0, 100);
+  const posted = posts.filter((p) => p.status === 'posted' && p.type !== 'story').slice(0, 100);
   const live = (t) => t?.state === 'done' && !t.deleted;
 
   // YouTube: one stats call per channel for all its videos.

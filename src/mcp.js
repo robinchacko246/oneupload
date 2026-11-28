@@ -19,7 +19,8 @@ const TOOLS = [
     description:
       'Create a post on one or more channels from media links. when="now" publishes immediately, when="schedule" publishes at scheduled_at, when="draft" saves it for later. ' +
       'media_urls must be direct, publicly reachable links to a video or photos (Google Drive "anyone with the link" and Dropbox share links are converted automatically). ' +
-      'One video = a Reel / Short (or type "video" for a normal long video). 1 photo = photo post, 2–10 photos = carousel. YouTube only takes videos. Max 300 MB.',
+      'One video = a Reel / Short (or type "video" for a normal long video). 1 photo = photo post, 2–10 photos = carousel. ' +
+      'type "story" = an Instagram Story from exactly one photo or video (Instagram channels only, no caption shown). YouTube only takes videos. Max 300 MB.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -31,7 +32,7 @@ const TOOLS = [
           type: 'string',
           description: 'When to publish, ISO 8601 with a timezone offset, e.g. 2026-11-28T19:00:00+05:30 (India). Needed for when="schedule".',
         },
-        type: { type: 'string', enum: ['reel', 'video', 'photo', 'carousel'], description: 'Optional. Worked out from the media if left out.' },
+        type: { type: 'string', enum: ['reel', 'video', 'photo', 'carousel', 'story'], description: 'Optional. Worked out from the media if left out.' },
         youtube_title: { type: 'string', description: 'Optional YouTube title (default: first line of the caption).' },
         youtube_privacy: { type: 'string', enum: ['public', 'unlisted', 'private'] },
       },

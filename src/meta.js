@@ -435,6 +435,33 @@ export async function publishInstagramMedia(page, { items, caption }, onStatus) 
   return { id: published.id, url, pageId: page.id, account: page.ig.username };
 }
 
+// ---------------- Instagram story ----------------
+
+// item: { kind: 'image' | 'video', url }. Stories have no caption; they disappear after 24 hours.
+export async function publishInstagramStory(page, item, onStatus) {
+  if (!page) throw new Error('Facebook/Instagram is not connected');
+  if (!page.ig) throw new Error(`The Page "${page.name}" has no Instagram Business/Creator account linked`);
+  const token = page.accessToken;
+  const igId = page.ig.id;
+  onStatus?.(item.kind === 'video' ? 'Instagram is fetching the story video' : 'Instagram is fetching the story photo');
+  const container = await graphPost(`/${igId}/media`, {
+    media_type: 'STORIES',
+    ...(item.kind === 'video' ? { video_url: item.url } : { image_url: item.url }),
+    access_token: token,
+  });
+  await waitForContainer(container.id, token, onStatus, 'Instagram is processing the story');
+  onStatus?.('Publishing the story');
+  const published = await graphPost(`/${igId}/media_publish`, { creation_id: container.id, access_token: token });
+  let url = `https://www.instagram.com/stories/${page.ig.username}/`;
+  try {
+    const info = await graphGet(`/${published.id}`, { fields: 'permalink', access_token: token });
+    if (info.permalink) url = info.permalink;
+  } catch {
+    /* permalink is optional */
+  }
+  return { id: published.id, url, pageId: page.id, account: page.ig.username };
+}
+
 // ---------------- Facebook Page photos ----------------
 
 // items: photos only. 1 photo = photo post; several = one post with all photos attached.
