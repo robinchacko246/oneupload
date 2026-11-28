@@ -37,6 +37,7 @@ import {
   publishFacebookPhotos,
   publishInstagramMedia,
   publishInstagramStory,
+  publishFacebookStory,
   uploadToFacebook,
   uploadToInstagram,
 } from './meta.js';
@@ -506,7 +507,7 @@ function checkMedia(type, targets, kinds) {
   const platforms = Object.values(targets).map((t) => t.platform);
   if (type === 'story') {
     if (kinds.length !== 1) return 'A story needs exactly one photo or video';
-    if (platforms.some((p) => p !== 'instagram')) return 'Stories go to Instagram only. Untick the other channels.';
+    if (platforms.includes('youtube')) return 'YouTube does not take stories. Untick the YouTube channels.';
     return null;
   }
   if (!PHOTO_TYPES.has(type)) return null;
@@ -705,7 +706,9 @@ async function runPost(post, input, source, only = null) {
       }
       const page = pageFromChannel(ch);
       if (post.type === 'story') {
-        if (ch.platform !== 'instagram' || !items?.length) throw new Error('Stories go to Instagram only');
+        if (!items?.length) throw new Error('No story media');
+        if (ch.platform === 'facebook') return publishFacebookStory(page, items[0], status);
+        if (ch.platform !== 'instagram') throw new Error('Stories go to Instagram and Facebook only');
         return publishInstagramStory(page, items[0], status);
       }
       if (ch.platform === 'instagram') {

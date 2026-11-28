@@ -462,6 +462,32 @@ export async function publishInstagramStory(page, item, onStatus) {
   return { id: published.id, url, pageId: page.id, account: page.ig.username };
 }
 
+// ---------------- Facebook Page story ----------------
+
+// item: { kind: 'image' | 'video', url }. Page stories last 24 hours; they have no caption.
+export async function publishFacebookStory(page, item, onStatus) {
+  if (!page) throw new Error('Facebook is not connected');
+  const token = page.accessToken;
+  let result;
+  if (item.kind === 'video') {
+    onStatus?.('Starting the Facebook story upload');
+    const start = await graphPost(`/${page.id}/video_stories`, { upload_phase: 'start', access_token: token });
+    onStatus?.('Facebook is fetching the story video');
+    await readGraphResponse(
+      await fetch(start.upload_url, { method: 'POST', headers: { Authorization: `OAuth ${token}`, file_url: item.url } }),
+    );
+    onStatus?.('Publishing the Facebook story');
+    result = await graphPost(`/${page.id}/video_stories`, { upload_phase: 'finish', video_id: start.video_id, access_token: token });
+  } else {
+    onStatus?.('Facebook is fetching the story photo');
+    const photo = await graphPost(`/${page.id}/photos`, { url: item.url, published: 'false', access_token: token });
+    onStatus?.('Publishing the Facebook story');
+    result = await graphPost(`/${page.id}/photo_stories`, { photo_id: photo.id, access_token: token });
+  }
+  const id = result.post_id || result.id || null;
+  return { id, url: `https://www.facebook.com/stories/${page.id}`, pageId: page.id };
+}
+
 // ---------------- Facebook Page photos ----------------
 
 // items: photos only. 1 photo = photo post; several = one post with all photos attached.

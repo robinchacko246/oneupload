@@ -20,7 +20,7 @@ const TOOLS = [
       'Create a post on one or more channels from media links. when="now" publishes immediately, when="schedule" publishes at scheduled_at, when="draft" saves it for later. ' +
       'media_urls must be direct, publicly reachable links to a video or photos (Google Drive "anyone with the link" and Dropbox share links are converted automatically). ' +
       'One video = a Reel / Short (or type "video" for a normal long video). 1 photo = photo post, 2–10 photos = carousel. ' +
-      'type "story" = an Instagram Story from exactly one photo or video (Instagram channels only, no caption shown). YouTube only takes videos. Max 300 MB.',
+      'type "story" = an Instagram Story from exactly one photo or video (Instagram accounts and Facebook Pages, no caption shown). YouTube only takes videos. Max 300 MB.',
     inputSchema: {
       type: 'object',
       properties: {

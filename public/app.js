@@ -309,12 +309,12 @@ function setPhotoUi(on) {
   // Channels that can't take this post are switched off.
   $$('input[name=channels]').forEach((i) => {
     const p = i.dataset.platform;
-    const off = story ? p !== 'instagram' : on && p === 'youtube';
+    const off = p === 'youtube' && (story || on);
     i.disabled = off;
     i.closest('.chpick').title = !off
       ? channelLabel(chanById(i.value) || {})
       : story
-        ? tr('Story Instagram-ൽ മാത്രം', 'Stories go to Instagram only')
+        ? tr('YouTube-ൽ Story ഇല്ല', 'YouTube does not take stories')
         : tr('YouTube photo posts സ്വീകരിക്കില്ല', 'YouTube does not accept photo posts');
   });
   $('#storyNote').hidden = !story;
@@ -1195,7 +1195,7 @@ function openEditor(job) {
     ? channels
         .map(
           (c) => `<label class="chpick" title="${esc(channelLabel(c))}">
-            <input type="checkbox" value="${esc(c.id)}" ${job.platforms?.[c.id] ? 'checked' : ''} ${(job.type === 'story' ? c.platform !== 'instagram' : photo && c.platform === 'youtube') ? 'disabled' : ''} />
+            <input type="checkbox" value="${esc(c.id)}" ${job.platforms?.[c.id] ? 'checked' : ''} ${((job.type === 'story' || photo) && c.platform === 'youtube') ? 'disabled' : ''} />
             ${avatar(c)}<span class="tick">✓</span><small>${esc(channelLabel(c))}</small></label>`,
         )
         .join('')
