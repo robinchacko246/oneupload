@@ -99,11 +99,11 @@ async function loadStatus() {
   const who = s.user?.name || s.user?.email || '';
   $('#meName').textContent = who;
   $('#meAvatar').textContent = (who.trim()[0] || '?').toUpperCase();
-  $('#channelCount').hidden = !channels.length;
-  $('#channelCount').textContent = channels.length;
   renderChannelPicker();
   renderChannelMini();
   renderChannelList();
+  renderSideChannels();
+  if (!$('[data-view="channel"].view').hidden) renderChannelView();
   if (!channels.length && !location.hash) location.hash = '#channels';
 }
 
@@ -873,6 +873,8 @@ const targetsOn = (jobs, platform) =>
 
 function render() {
   renderPlanner();
+  renderSideChannels();
+  if (!$('[data-view="channel"].view').hidden) renderChannelView();
   // The Posted page only shows uploads that went out (or are going out now).
   const postedJobs = allJobs.filter((j) => j.status === 'posted' || j.status === 'posting');
   // Tab counts: posts that are live on each platform.
@@ -1214,11 +1216,13 @@ $('#editForm').addEventListener('submit', async (e) => {
 // ---------- calendar ----------
 let calMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 let calSelected = dayKey(new Date());
+let calFilter = null; // channel id, or null for all channels
 
 function calendarEvents() {
   const map = new Map();
   for (const j of allJobs) {
     if (j.status === 'draft') continue;
+    if (calFilter && !j.platforms?.[calFilter]) continue;
     const iso = j.status === 'scheduled' ? j.scheduledAt : j.postedAt || j.createdAt;
     if (!iso) continue;
     const key = dayKey(new Date(iso));
@@ -1366,6 +1370,7 @@ async function loadAnalytics(refresh = false) {
   } catch {
     return;
   }
+  if (!data.error) statsData = data;
   if (data.error) {
     $('#statTiles').innerHTML = `<div class="empty">${esc(data.error)}</div>`;
     return;
@@ -1459,18 +1464,240 @@ $('#copyConnector').addEventListener('click', async () => {
   toast(tr('Link copy ചെയ്തു ✓', 'Link copied ✓'));
 });
 
+// =====================================================================
+//  Sidebar channel list + one channel's Queue / Drafts / Sent
+// =====================================================================
+let currentCh = null; // channel id shown on the channel page
+let chTab = 'queue';
+let statsData = null; // last /api/analytics answer (views, likes, thumbnails)
+let statsLoading = null;
+
+const targetOf = (j, id) => j.platforms?.[id];
+const chScheduled = (id) => allJobs.filter((j) => j.status === 'scheduled' && targetOf(j, id));
+
+function renderSideChannels() {
+  const box = $('#sideChannels');
+  if (!box) return;
+  if (!channels.length) {
+    box.innerHTML = `<div class="side-empty">${tr('Channels ഇല്ല. <a href="#channels">ചേർക്കൂ →</a>', 'No channels yet. <a href="#channels">Connect one →</a>')}</div>`;
+    return;
+  }
+  box.innerHTML = channels
+    .map((c) => {
+      const n = chScheduled(c.id).length;
+      const sub = c.platform === 'facebook' ? 'Facebook Page' : c.platform === 'youtube' ? 'YouTube' : c.info?.pageName ? `Instagram · ${c.info.pageName}` : 'Instagram';
+      return `<a class="side-ch ${c.id === currentCh && location.hash.startsWith('#ch/') ? 'active' : ''}" href="#ch/${encodeURIComponent(c.id)}" title="${esc(channelLabel(c))} · ${n} ${tr('scheduled', 'scheduled')}">
+        ${avatar(c, 'md')}<span class="nm"><b>${esc(c.username || c.name)}</b><small>${esc(sub)}</small></span><span class="n">${n || ''}</span></a>`;
+    })
+    .join('');
+}
+
+async function loadStats(refresh = false) {
+  if (statsData && !refresh) return statsData;
+  statsLoading ||= apiFetch(`/api/analytics${refresh ? '?refresh=1' : ''}`)
+    .then((r) => r.json())
+    .then((d) => (statsData = d.error ? statsData : d))
+    .catch(() => statsData)
+    .finally(() => (statsLoading = null));
+  return statsLoading;
+}
+const statLine = (postId, chId) => statsData?.rows?.find((r) => r.id === postId)?.lines?.find((l) => l.channelId === chId) || null;
+
+function ytThumb(url) {
+  const m = String(url || '').match(/(?:shorts\/|v=|youtu\.be\/)([\w-]{6,})/);
+  return m ? `https://i.ytimg.com/vi/${m[1]}/mqdefault.jpg` : null;
+}
+
+function postCard(j, c, mode) {
+  const t = targetOf(j, c.id) || {};
+  const line = mode === 'sent' ? statLine(j.id, c.id) : null;
+  const thumb = line?.thumb || (c.platform === 'youtube' ? ytThumb(t.url) : null);
+  const others = Object.entries(j.platforms || {}).filter(([k]) => k !== c.id);
+  const photo = j.type === 'photo' || j.type === 'carousel';
+  const overdue = j.status === 'scheduled' && new Date(j.scheduledAt) < new Date();
+
+  let stats = '';
+  if (mode === 'sent' && t.state === 'done' && !t.deleted && c.platform !== 'facebook') {
+    if (line && !line.error) {
+      const cell = (label, v) => `<div><small>${label}</small><b>${num(v)}</b></div>`;
+      stats = `<div class="stats">${line.views != null ? cell('Views', line.views) : ''}${cell('Likes', line.likes)}${cell('Comments', line.comments)}</div>`;
+    } else if (!statsData) {
+      stats = `<div class="stats"><div><small>${tr('Stats എടുക്കുന്നു…', 'Loading stats…')}</small></div></div>`;
+    }
+  }
+
+  let info = '';
+  let acts = '';
+  if (mode === 'sent') {
+    if (t.deleted) info = `<span class="tag deleted">Deleted</span>`;
+    else if (isActive(t)) info = `<span class="spin"></span> ${esc(t.message || tr('Post ചെയ്യുന്നു…', 'Posting…'))}`;
+    else if (t.state === 'error') info = `✕ ${esc(t.message || 'Failed')}`;
+    else info = `${tr('Post ചെയ്തത്', 'Posted')} ${timeAgo(j.postedAt || j.createdAt)}`;
+    if (t.state === 'error' && j.canRetry) acts += `<button class="btn small retry" data-retry="${esc(j.id)}" data-platform="${esc(c.id)}">${UI_ICONS.retry} Retry</button>`;
+    if (t.url && !t.deleted) acts += `<a class="btn" href="${esc(t.url)}" target="_blank" rel="noopener">${UI_ICONS.open.replace('<svg', '<svg width="15" height="15"')} ${tr('Post കാണൂ', 'Go to post')}</a>`;
+    if (t.state === 'done' && !t.deleted) acts += `<button class="icon-btn del" data-del="${esc(j.id)}" data-platform="${esc(c.id)}" title="${tr('Delete ചെയ്യൂ', 'Delete')}">${UI_ICONS.trash}</button>`;
+  } else {
+    info = j.status === 'draft' ? tr('Draft · സമയം വെച്ചിട്ടില്ല', 'Draft · no time set') : overdue ? tr('സമയം കഴിഞ്ഞു, ഉടനെ post ആവും', 'Due now, going out shortly') : `${tr('Schedule ചെയ്തത്', 'Scheduled for')} ${fmtWhen(j.scheduledAt)}`;
+    acts = `<button class="btn small" data-act="now" data-id="${esc(j.id)}">⚡ ${tr('ഇപ്പോൾ post', 'Post now')}</button>
+      <button class="icon-btn" data-act="edit" data-id="${esc(j.id)}" title="Edit">${EDIT_ICON}</button>
+      <button class="icon-btn del" data-act="delete" data-id="${esc(j.id)}" title="Delete">${UI_ICONS.trash}</button>`;
+  }
+
+  return `<div class="pcard ${overdue ? 'overdue' : ''}">
+    <div class="pbody">
+      <div style="min-width:0">
+        <div class="who">${avatar(c, 'md')}<b>${esc(c.username || c.name)}</b><span class="chip">${typeLabel(j)}</span></div>
+        <p class="cap">${esc(j.caption || j.fileName || '')}</p>
+        ${others.length ? `<div class="others">${tr('ഇവിടെയും:', 'Also on:')} ${others.map(([k, o]) => targetAvatar(k, o)).join('')}</div>` : ''}
+      </div>
+      <div class="thumb">${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : photo ? '🖼️' : '🎬'}</div>
+    </div>
+    ${stats}
+    <div class="pfoot"><span class="info ${t.state === 'error' && mode === 'sent' ? 'err' : ''}">${info}</span>${acts}</div>
+  </div>`;
+}
+
+function renderChannelView() {
+  const c = chanById(currentCh);
+  if (!c) {
+    $('#chId').innerHTML = '';
+    $('#chList').innerHTML = `<div class="empty"><span class="big">🔗</span>${tr('ഈ channel ഇപ്പോൾ ഇല്ല.', 'This channel is not connected any more.')} <a href="#channels">Channels →</a></div>`;
+    return;
+  }
+  const mine = allJobs.filter((j) => targetOf(j, c.id));
+  const queue = mine.filter((j) => j.status === 'scheduled').sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
+  const drafts = mine.filter((j) => j.status === 'draft');
+  const sent = mine
+    .filter((j) => j.status === 'posted' || j.status === 'posting')
+    .sort((a, b) => new Date(b.postedAt || b.createdAt) - new Date(a.postedAt || a.createdAt));
+  const weekAgo = Date.now() - 7 * 864e5;
+  const thisWeek = sent.filter((j) => targetOf(j, c.id).state === 'done' && new Date(j.postedAt || j.createdAt) > weekAgo).length;
+
+  const sub = [NAMES[c.platform], c.platform === 'instagram' && c.info?.pageName ? c.info.pageName : ''].filter(Boolean).join(' · ');
+  $('#chId').innerHTML = `${avatar(c, 'lg')}<div style="min-width:0"><h2>${esc(c.username || c.name)}</h2>
+    <small>${tr(`ഈ ആഴ്ച ${thisWeek} posts`, `${thisWeek} ${thisWeek === 1 ? 'post' : 'posts'} sent this week`)} · ${esc(sub)}</small></div>`;
+  $('#chNew').href = `#new/${encodeURIComponent(c.id)}`;
+  $$('[data-chcount]').forEach((el) => (el.textContent = { queue: queue.length, draft: drafts.length, sent: sent.length }[el.dataset.chcount]));
+  $$('.ch-tab').forEach((b) => b.classList.toggle('on', b.dataset.chtab === chTab));
+  $('#chTz').textContent = `🌐 ${Intl.DateTimeFormat().resolvedOptions().timeZone || ''}`;
+
+  const list = { queue, draft: drafts, sent }[chTab];
+  if (!list.length) {
+    const msg = {
+      queue: tr('Queue കാലിയാണ്. “New post”-ൽ Schedule തിരഞ്ഞെടുത്ത് സമയം വെക്കൂ.', 'The queue is empty. Use “New post” and pick Schedule to add one.'),
+      draft: tr('Drafts ഇല്ല', 'No drafts'),
+      sent: tr('ഈ channel-ൽ One Upload വഴി ഇതുവരെ ഒന്നും post ചെയ്തിട്ടില്ല', 'Nothing has been posted to this channel from One Upload yet'),
+    }[chTab];
+    $('#chList').innerHTML = `<div class="empty"><span class="big">${{ queue: '🗓️', draft: '📝', sent: '📭' }[chTab]}</span>${msg}</div>`;
+    return;
+  }
+  if (chTab === 'draft') {
+    $('#chList').innerHTML = `<div class="feed-day"><div class="items">${list.map((j) => postCard(j, c, 'draft')).join('')}</div></div>`;
+    return;
+  }
+  const groups = new Map();
+  for (const j of list) {
+    const d = new Date(chTab === 'queue' ? j.scheduledAt : j.postedAt || j.createdAt);
+    const key = dayKey(d);
+    if (!groups.has(key)) groups.set(key, { d, items: [] });
+    groups.get(key).items.push({ j, d });
+  }
+  const head = (d) => {
+    const l = dayLabel(d);
+    const date = d.toLocaleDateString([], { month: 'long', day: 'numeric' });
+    return ['Today', 'Tomorrow'].includes(l) ? `${l}, <span>${esc(date)}</span>` : esc(l);
+  };
+  $('#chList').innerHTML = [...groups.values()]
+    .map(
+      (g) => `<div class="feed-day"><h4>${head(g.d)}</h4><div class="items">${g.items
+        .map(({ j, d }) => `<div class="feed-row"><div class="when"><b>${fmtTime(d.toISOString())}</b><small>${chTab === 'queue' ? tr('Schedule', 'Scheduled') : tr('Post ചെയ്തു', 'Sent')}</small></div>${postCard(j, c, chTab)}</div>`)
+        .join('')}</div></div>`,
+    )
+    .join('');
+  if (chTab === 'sent' && !statsData) loadStats().then(() => !$('[data-view="channel"].view').hidden && renderChannelView());
+}
+
+$('#chTabs').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-chtab]');
+  if (!b) return;
+  chTab = b.dataset.chtab;
+  renderChannelView();
+});
+$('.chview .seg-mini').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-layout]');
+  if (b?.dataset.layout !== 'calendar') return;
+  calFilter = currentCh;
+  location.hash = '#calendar';
+});
+$('#chList').addEventListener('click', (e) => {
+  const retryBtn = e.target.closest('[data-retry]');
+  if (retryBtn) return retryPost(retryBtn);
+  const delBtn = e.target.closest('[data-del]');
+  if (delBtn) return deletePost(delBtn);
+});
+
+// Calendar: optional filter to one channel.
+function renderCalFilter() {
+  const sel = $('#calFilter');
+  sel.innerHTML = `<option value="">${tr('എല്ലാ channels', 'All channels')}</option>` + channels.map((c) => `<option value="${esc(c.id)}">${esc(channelLabel(c))}</option>`).join('');
+  sel.value = calFilter && chanById(calFilter) ? calFilter : '';
+}
+$('#calFilter').addEventListener('change', (e) => {
+  calFilter = e.target.value || null;
+  renderCalendar();
+});
+
+// Mobile: the sidebar slides in.
+const setSide = (open) => {
+  document.body.classList.toggle('side-open', open);
+  $('#sideScrim').hidden = !open;
+};
+$('#sideOpen').addEventListener('click', () => setSide(true));
+$('#sideClose').addEventListener('click', () => setSide(false));
+$('#sideScrim').addEventListener('click', () => setSide(false));
+
+// "New post" from a channel page: tick only that channel in the composer.
+function preselectChannel(id) {
+  // Saved first: if channels are still loading, the picker reads it when it renders.
+  localStorage.setItem(CHANNEL_KEY, JSON.stringify([id]));
+  $$('input[name=channels]').forEach((i) => (i.checked = i.value === id));
+  updatePickedCount();
+}
+
 // ---------- navigation ----------
-const VIEW_NAMES = ['create', 'queue', 'calendar', 'posted', 'ideas', 'analytics', 'channels'];
-function showView(name) {
-  if (!VIEW_NAMES.includes(name)) name = 'create';
+const VIEW_NAMES = ['create', 'queue', 'calendar', 'posted', 'ideas', 'analytics', 'channels', 'channel'];
+function showView(hash) {
+  let name = hash;
+  let arg = null;
+  const slash = hash.indexOf('/');
+  if (slash > 0) {
+    name = hash.slice(0, slash);
+    arg = decodeURIComponent(hash.slice(slash + 1));
+  }
+  if (name === 'ch') name = 'channel';
+  if (name === 'new') {
+    name = 'create';
+    if (arg) preselectChannel(arg);
+  }
+  if (!VIEW_NAMES.includes(name) || (name === 'channel' && !arg)) name = 'create';
+  if (name === 'channel') {
+    if (arg !== currentCh) chTab = 'queue';
+    currentCh = arg;
+  }
+  setSide(false);
   $$('.view').forEach((v) => (v.hidden = v.dataset.view !== name));
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === name));
-  if (['queue', 'calendar', 'posted'].includes(name)) loadJobs();
+  renderSideChannels();
+  if (['queue', 'calendar', 'posted', 'channel'].includes(name)) loadJobs();
   if (name === 'channels') {
     loadStatus().catch(() => {});
     loadConnector();
   }
-  if (name === 'calendar') renderCalendar();
+  if (name === 'channel') renderChannelView();
+  if (name === 'calendar') {
+    renderCalFilter();
+    renderCalendar();
+  } else if (name !== 'channel') calFilter = null;
   if (name === 'ideas') loadIdeas();
   if (name === 'analytics') loadAnalytics();
   if (name === 'queue') loadCronInfo();

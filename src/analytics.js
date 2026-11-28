@@ -72,8 +72,10 @@ export async function getAnalytics(userId, refresh = false) {
       const lines = Object.entries(p.targets)
         .filter(([, t]) => live(t) && t.platform !== 'facebook')
         .map(([cid, t]) => {
-          const stats = t.platform === 'youtube' ? ytStats[t.postId || youtubeIdFromUrl(t.url)] : t.postId ? igStats[t.postId] : { note: 'old post' };
-          return { channelId: cid, platform: t.platform, channelName: t.channelName, url: t.url, ...(stats || {}) };
+          const vid = t.platform === 'youtube' ? t.postId || youtubeIdFromUrl(t.url) : null;
+          const stats = vid ? ytStats[vid] : t.postId ? igStats[t.postId] : { note: 'old post' };
+          const thumb = vid ? `https://i.ytimg.com/vi/${vid}/mqdefault.jpg` : null;
+          return { channelId: cid, platform: t.platform, channelName: t.channelName, url: t.url, thumb, ...(stats || {}) };
         });
       return { id: p.id, title: (p.caption || '').split('\n')[0] || p.fileName, createdAt: p.postedAt || p.createdAt, type: p.type, lines };
     })

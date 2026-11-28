@@ -190,8 +190,13 @@ export async function deleteInstagramMedia(page, mediaId) {
 
 // Likes / comments (and views when allowed) for one Instagram post.
 export async function instagramPostStats(page, mediaId) {
-  const basic = await graphGet(`/${mediaId}`, { fields: 'like_count,comments_count', access_token: page.accessToken });
-  const stats = { likes: basic.like_count ?? null, comments: basic.comments_count ?? null, views: null };
+  const basic = await graphGet(`/${mediaId}`, { fields: 'like_count,comments_count,media_type,media_url,thumbnail_url', access_token: page.accessToken });
+  const stats = {
+    likes: basic.like_count ?? null,
+    comments: basic.comments_count ?? null,
+    views: null,
+    thumb: basic.thumbnail_url || (basic.media_type === 'VIDEO' ? null : basic.media_url) || null,
+  };
   if (page.permissions.includes('instagram_manage_insights')) {
     for (const metric of ['views', 'plays']) {
       try {
