@@ -38,6 +38,8 @@ import {
   publishInstagramMedia,
   publishInstagramStory,
   publishFacebookStory,
+  instagramRecentMedia,
+  instagramMediaUrl,
   uploadToFacebook,
   uploadToInstagram,
 } from './meta.js';
@@ -1088,6 +1090,45 @@ app.all(
   asyncRoute(async (req, res) => {
     if (!safeEqual(String(req.query.key || ''), cronKey())) return res.status(403).json({ error: 'Bad key' });
     res.json({ ok: true, started: await runDuePosts() });
+  }),
+);
+
+// ---------- copy your own Instagram posts to other channels ----------
+
+async function ownInstagramPage(userId, id) {
+  const ch = db.withSecret(await db.getChannel(userId, id));
+  if (!ch || ch.platform !== 'instagram') throw httpError(404, 'Instagram channel not found');
+  return pageFromChannel(ch);
+}
+
+app.get(
+  '/api/channels/:id/ig-media',
+  asyncRoute(async (req, res) => {
+    const page = await ownInstagramPage(req.userId, req.params.id);
+    const days = Math.min(365, Math.max(1, Number(req.query.days) || 60));
+    res.json(await instagramRecentMedia(page, { days }));
+  }),
+);
+
+// Body: { mediaId, channels: "id,id", mode, scheduledAt, ytTitle, privacy, caption? }
+app.post(
+  '/api/channels/:id/ig-copy',
+  asyncRoute(async (req, res) => {
+    const b = req.body || {};
+    const page = await ownInstagramPage(req.userId, req.params.id);
+    const m = await instagramMediaUrl(page, String(b.mediaId || ''));
+    if (m.media_type !== 'VIDEO') throw httpError(400, 'Only video posts (Reels) can be copied for now');
+    const post = await createPostFromUrls(req.userId, {
+      channelIds: String(b.channels || '').split(',').filter(Boolean),
+      caption: b.caption ?? m.caption ?? '',
+      mediaUrls: [m.media_url],
+      mode: b.mode || 'draft',
+      scheduledAt: b.scheduledAt,
+      type: b.type || 'reel',
+      ytTitle: b.ytTitle,
+      privacy: b.privacy,
+    });
+    res.json(post);
   }),
 );
 

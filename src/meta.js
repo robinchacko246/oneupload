@@ -435,6 +435,36 @@ export async function publishInstagramMedia(page, { items, caption }, onStatus) 
   return { id: published.id, url, pageId: page.id, account: page.ig.username };
 }
 
+// ---------------- Instagram: own recent media (to copy to other channels) ----------------
+
+// Recent posts of the connected account, newest first. `withUrl` adds the (short-lived) media_url.
+export async function instagramRecentMedia(page, { days = 60, withUrl = false } = {}) {
+  if (!page?.ig) throw new Error('Not an Instagram channel');
+  const since = Date.now() - days * 864e5;
+  const fields = ['id', 'caption', 'media_type', 'media_product_type', 'timestamp', 'permalink', 'thumbnail_url'];
+  if (withUrl) fields.push('media_url');
+  const out = [];
+  let next = `/${page.ig.id}/media`;
+  let params = { fields: fields.join(','), limit: '50', access_token: page.accessToken };
+  while (next && out.length < 300) {
+    const r = await graphGet(next, params);
+    for (const m of r.data || []) {
+      if (new Date(m.timestamp).getTime() < since) return out;
+      out.push(m);
+    }
+    const after = r.paging?.cursors?.after;
+    if (!r.paging?.next || !after) break;
+    params = { ...params, after };
+  }
+  return out;
+}
+
+export async function instagramMediaUrl(page, mediaId) {
+  const m = await graphGet(`/${mediaId}`, { fields: 'media_type,media_url,caption,timestamp', access_token: page.accessToken });
+  if (!m.media_url) throw new Error('Instagram did not give a download link for this post');
+  return m;
+}
+
 // ---------------- Instagram story ----------------
 
 // item: { kind: 'image' | 'video', url }. Stories have no caption; they disappear after 24 hours.
