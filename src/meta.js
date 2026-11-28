@@ -11,8 +11,9 @@ const SCOPES = [
   'instagram_content_publish',
   // Needed to delete Instagram posts from the app.
   'instagram_manage_contents',
-  // Needed for view counts in Analytics.
-  'instagram_manage_insights',
+  // Needed for view counts in Analytics. Not in the current App Review submission,
+  // so only asked for when META_INSIGHTS=1 (turn on once it is approved).
+  ...(process.env.META_INSIGHTS === '1' ? ['instagram_manage_insights'] : []),
 ];
 
 const GRAPH = () => `https://graph.facebook.com/${config.meta.version}`;
