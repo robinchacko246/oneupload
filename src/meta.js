@@ -459,9 +459,10 @@ export async function instagramRecentMedia(page, { days = 60, withUrl = false } 
   return out;
 }
 
-export async function instagramMediaUrl(page, mediaId) {
-  const m = await graphGet(`/${mediaId}`, { fields: 'media_type,media_url,caption,timestamp', access_token: page.accessToken });
-  if (!m.media_url) throw new Error('Instagram did not give a download link for this post');
+// Without `fields`: the post's download link (throws if Instagram gives none).
+export async function instagramMediaUrl(page, mediaId, fields) {
+  const m = await graphGet(`/${mediaId}`, { fields: fields || 'media_type,media_url,caption,timestamp', access_token: page.accessToken });
+  if (!fields && !m.media_url) throw new Error('Instagram did not give a download link for this post');
   return m;
 }
 

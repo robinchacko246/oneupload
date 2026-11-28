@@ -647,6 +647,20 @@ async function downloadBlob(url, dest) {
   await pipeline(Readable.fromWeb(result.stream), fs.createWriteStream(dest));
 }
 
+// source { kind: 'ig', channelId, mediaId }: a video on the user's own Instagram account.
+async function igSourceMedia(userId, source) {
+  const ch = db.withSecret(await db.getChannel(userId, source.channelId));
+  if (!ch) throw new Error('The Instagram account this video comes from is no longer connected');
+  return instagramMediaUrl(pageFromChannel(ch), source.mediaId);
+}
+
+async function downloadTo(url, dest) {
+  const res = await fetch(url);
+  if (!res.ok || !res.body) throw new Error(`Could not download the video (HTTP ${res.status})`);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(dest));
+}
+
 async function deleteSourceVideo(source) {
   if (!source) return;
   if (source.kind === 'multi') return void (await Promise.all(source.items.map((i) => deleteSourceVideo(i))));
@@ -679,6 +693,13 @@ async function runPost(post, input, source, only = null) {
     if (source.kind === 'multi') {
       keys.forEach((k) => update(k, { message: 'Preparing photos' }));
       items = await Promise.all(source.items.map(async (i) => ({ kind: i.media, url: await publicUrlFor(i) })));
+    } else if (source.kind === 'ig') {
+      keys.forEach((k) => update(k, { message: 'Getting the video from Instagram' }));
+      const m = await igSourceMedia(post.userId, source);
+      tempFile = path.join(config.paths.uploads, `${post.id}.mp4`);
+      await downloadTo(m.media_url, tempFile);
+      filePath = tempFile;
+      videoUrl = m.media_url;
     } else if (source.kind === 'blob') {
       keys.forEach((k) => update(k, { message: 'Preparing video' }));
       tempFile = path.join(config.paths.uploads, `${post.id}${path.extname(post.fileName) || '.mp4'}`);
@@ -764,6 +785,7 @@ function firstMedia(p) {
   const src = p.mediaSource || p.retrySource;
   if (!src) return null;
   if (src.kind === 'multi') return src.items?.[0] || null;
+  if (src.kind === 'ig') return { ...src, media: 'image' }; // shown with Instagram's cover image
   return { ...src, media: src.media || 'video' };
 }
 function previewOf(p) {
@@ -800,6 +822,13 @@ app.get(
     if (!m) return res.status(404).end();
     res.set('Cache-Control', 'private, max-age=3000');
     if (m.kind === 'blob') return res.redirect(302, await signedBlobUrl(m.url));
+    if (m.kind === 'ig') {
+      const ch = db.withSecret(await db.getChannel(req.userId, m.channelId));
+      if (!ch) return res.status(404).end();
+      const info = await instagramMediaUrl(pageFromChannel(ch), m.mediaId, 'thumbnail_url,media_url,media_type').catch(() => null);
+      const url = info?.thumbnail_url || (info?.media_type === 'IMAGE' ? info.media_url : null);
+      return url ? res.redirect(302, url) : res.status(404).end();
+    }
     if (m.kind === 'file' && m.path && fs.existsSync(m.path)) return res.sendFile(path.resolve(m.path));
     res.status(404).end();
   }),
@@ -1111,6 +1140,8 @@ app.get(
 );
 
 // Body: { mediaId, channels: "id,id", mode, scheduledAt, ytTitle, privacy, caption? }
+// Only the Instagram post id is stored; the video is fetched from Instagram when it is published,
+// so scheduled copies take no storage.
 app.post(
   '/api/channels/:id/ig-copy',
   asyncRoute(async (req, res) => {
@@ -1118,17 +1149,36 @@ app.post(
     const page = await ownInstagramPage(req.userId, req.params.id);
     const m = await instagramMediaUrl(page, String(b.mediaId || ''));
     if (m.media_type !== 'VIDEO') throw httpError(400, 'Only video posts (Reels) can be copied for now');
-    const post = await createPostFromUrls(req.userId, {
-      channelIds: String(b.channels || '').split(',').filter(Boolean),
-      caption: b.caption ?? m.caption ?? '',
-      mediaUrls: [m.media_url],
-      mode: b.mode || 'draft',
-      scheduledAt: b.scheduledAt,
+    const fields = readFields({
+      channels: String(b.channels || ''),
       type: b.type || 'reel',
+      caption: b.caption ?? m.caption ?? '',
       ytTitle: b.ytTitle,
       privacy: b.privacy,
+      mode: b.mode || 'draft',
+      scheduledAt: b.scheduledAt,
     });
-    res.json(post);
+    const source = { kind: 'ig', channelId: req.params.id, mediaId: String(b.mediaId) };
+    const post = await createPost(req.userId, fields, source, `instagram-${b.mediaId}.mp4`);
+    res.json(publicPost(post));
+  }),
+);
+
+// Switches a waiting post's media to an Instagram post (and deletes its stored copy).
+app.post(
+  '/api/jobs/:id/use-instagram',
+  asyncRoute(async (req, res) => {
+    const b = req.body || {};
+    const post = await db.getPost(req.userId, req.params.id);
+    if (!post || !['scheduled', 'draft'].includes(post.status)) throw httpError(400, 'Only scheduled posts and drafts can be changed');
+    const page = await ownInstagramPage(req.userId, String(b.channelId || ''));
+    const m = await instagramMediaUrl(page, String(b.mediaId || ''));
+    if (m.media_type !== 'VIDEO') throw httpError(400, 'That Instagram post is not a video');
+    const old = post.mediaSource;
+    post.mediaSource = { kind: 'ig', channelId: String(b.channelId), mediaId: String(b.mediaId) };
+    const saved = await db.savePost(post);
+    await deleteSourceVideo(old);
+    res.json(publicPost(saved));
   }),
 );
 
